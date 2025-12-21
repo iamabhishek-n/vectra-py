@@ -1,0 +1,10 @@
+pypdf
+mammoth
+openpyxl
+openai
+google-generativeai
+anthropic
+pydantic
+prisma
+chromadb
+requests

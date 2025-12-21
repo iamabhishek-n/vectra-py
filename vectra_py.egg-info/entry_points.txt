@@ -1,0 +1,2 @@
+[console_scripts]
+vectra = vectra.cli:main

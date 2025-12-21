@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vectra-py"
+version = "1.0.0"
+description = "A production-ready, provider-agnostic Python SDK for End-to-End RAG pipelines."
+authors = [{ name = "Abhishek N", email = "astro@thenxtgenagents.com" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "pypdf",
+    "mammoth",
+    "openpyxl",
+    "openai",
+    "google-generativeai",
+    "anthropic",
+    "pydantic",
+    "prisma",
+    "chromadb",
+    "requests"
+]
+
+[project.scripts]
+vectra = "vectra.cli:main"
