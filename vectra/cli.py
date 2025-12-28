@@ -11,14 +11,20 @@ def load_config(path):
 
 async def main_async():
     parser = argparse.ArgumentParser(prog='vectra')
-    parser.add_argument('cmd', choices=['ingest','query','webconfig'])
+    parser.add_argument('cmd', choices=['ingest','query','webconfig', 'dashboard'])
     parser.add_argument('target', nargs='?')
     parser.add_argument('--config')
     parser.add_argument('--stream', action='store_true')
     args = parser.parse_args()
     if args.cmd == 'webconfig':
         cfg_path = args.config or os.path.join(os.getcwd(), 'vectra-config.json')
-        start_webconfig(cfg_path)
+        start_webconfig(cfg_path, 'webconfig')
+        await asyncio.Event().wait()
+        return
+
+    if args.cmd == 'dashboard':
+        cfg_path = args.config or os.path.join(os.getcwd(), 'vectra-config.json')
+        start_webconfig(cfg_path, 'dashboard')
         await asyncio.Event().wait()
         return
     

@@ -3,13 +3,19 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vectra-py"
-version = "1.0.0"
+name = "vectra-rag-py"
+version = "0.9.0"
 description = "A production-ready, provider-agnostic Python SDK for End-to-End RAG pipelines."
-authors = [{ name = "Abhishek N", email = "astro@thenxtgenagents.com" }]
+authors = [{ name = "Abhishek N", email = "astroabhi.abhi@gmail.com" }]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.8"
+keywords = ["rag", "llm", "openai", "anthropic", "gemini", "vector-database"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "pypdf",
     "mammoth",
@@ -22,6 +28,10 @@ dependencies = [
     "chromadb",
     "requests"
 ]
+
+[project.urls]
+Homepage = "https://github.com/iamabhishek-n/vectra-py"
+Issues = "https://github.com/iamabhishek-n/vectra-py/issues"
 
 [project.scripts]
 vectra = "vectra.cli:main"

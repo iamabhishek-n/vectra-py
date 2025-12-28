@@ -71,8 +71,6 @@ class PostgresHistory:
         try:
             if hasattr(self.client, 'execute_raw'):
                 await self.client.execute_raw(q, session_id, role, content)
-            elif hasattr(self.client, '$executeRawUnsafe'):
-                await self.client.$executeRawUnsafe(q, session_id, role, content)
         except Exception:
             pass
     async def get_recent(self, session_id: str, n: int = 10) -> List[Dict[str, Any]]:
@@ -85,8 +83,6 @@ class PostgresHistory:
             rows = []
             if hasattr(self.client, 'query_raw'):
                 rows = await self.client.query_raw(q, session_id)
-            elif hasattr(self.client, '$queryRawUnsafe'):
-                rows = await self.client.$queryRawUnsafe(q, session_id)
             if isinstance(rows, list):
                 rows.reverse()
                 return [{ 'role': r.get('role'), 'content': r.get('content') } for r in rows]

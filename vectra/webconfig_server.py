@@ -2,9 +2,29 @@ import json
 import os
 import threading
 import webbrowser
+import sqlite3
+from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
 from .config import RAGConfig, ProviderType, ChunkingStrategy, RetrievalStrategy
+
+def _get_db_connection(config_path):
+    try:
+        if not os.path.exists(config_path):
+            return None
+        with open(config_path, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+        
+        obs = cfg.get('observability', {})
+        if not obs.get('enabled'):
+            return None
+            
+        db_path = obs.get('sqlite_path', 'vectra-observability.db')
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        print(f"Failed to open observability DB: {e}")
+        return None
 
 def _default_config():
     return {
@@ -62,11 +82,11 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _serve_static(self, path, content_type):
+    def _serve_static(self, path, content_type, folder='ui'):
         try:
             # Locate the ui directory relative to this file
             base_dir = os.path.dirname(__file__)
-            file_path = os.path.join(base_dir, 'ui', path)
+            file_path = os.path.join(base_dir, folder, path)
             
             with open(file_path, 'rb') as f:
                 data = f.read()
@@ -82,6 +102,124 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         p = urlparse(self.path)
         
+        # --- Dashboard Routes ---
+        if p.path == "/dashboard" or p.path == "/dashboard/":
+            self._serve_static("index.html", "text/html; charset=utf-8", folder="dashboard")
+            return
+            
+        if p.path.startswith("/dashboard/"):
+            asset_name = p.path.replace("/dashboard/", "")
+            content_type = "text/plain"
+            if asset_name.endswith(".css"): content_type = "text/css"
+            elif asset_name.endswith(".js"): content_type = "application/javascript"
+            elif asset_name.endswith(".html"): content_type = "text/html"
+            self._serve_static(asset_name, content_type, folder="dashboard")
+            return
+
+        # --- Observability API ---
+        if p.path.startswith("/api/observability/"):
+            conn = _get_db_connection(self.server.config_path)
+            if not conn:
+                self._send_json(400, {"error": "Observability not enabled or DB not found"})
+                return
+
+            try:
+                qs = parse_qs(p.query)
+                project_id = qs.get('projectId', [None])[0]
+                
+                # Filter Logic
+                where_clauses = []
+                params = []
+                if project_id and project_id != 'all':
+                    where_clauses.append("project_id = ?")
+                    params.append(project_id)
+                
+                where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+                and_sql = "AND " + " AND ".join(where_clauses) if where_clauses else ""
+
+                if p.path.endswith("/stats"):
+                    cur = conn.cursor()
+                    
+                    # Total Requests
+                    cur.execute(f"SELECT COUNT(*) as count FROM traces WHERE name = 'queryRAG' {and_sql.replace('AND', 'WHERE', 1) if not where_sql else and_sql}", params)
+                    total_req = cur.fetchone()['count']
+                    
+                    # Avg Latency
+                    cur.execute(f"SELECT AVG(value) as val FROM metrics WHERE name = 'query_latency' {and_sql}", params)
+                    avg_lat = cur.fetchone()['val'] or 0
+                    
+                    # Token Counts
+                    cur.execute(f"SELECT SUM(value) as val FROM metrics WHERE name = 'prompt_chars' {and_sql}", params)
+                    tokens_p = cur.fetchone()['val'] or 0
+                    
+                    cur.execute(f"SELECT SUM(value) as val FROM metrics WHERE name = 'completion_chars' {and_sql}", params)
+                    tokens_c = cur.fetchone()['val'] or 0
+
+                    # History
+                    cur.execute(f"""
+                        SELECT m.timestamp, m.value as latency, 
+                        (SELECT value FROM metrics m2 WHERE m2.timestamp = m.timestamp AND m2.name = 'prompt_chars') + 
+                        (SELECT value FROM metrics m3 WHERE m3.timestamp = m.timestamp AND m3.name = 'completion_chars') as tokens
+                        FROM metrics m 
+                        WHERE m.name = 'query_latency' {and_sql}
+                        ORDER BY m.timestamp DESC LIMIT 50
+                    """, params)
+                    history = [dict(row) for row in cur.fetchall()]
+                    history.reverse()
+
+                    self._send_json(200, {
+                        "totalRequests": total_req,
+                        "avgLatency": avg_lat,
+                        "totalPromptChars": tokens_p,
+                        "totalCompletionChars": tokens_c,
+                        "history": history
+                    })
+                
+                elif p.path.endswith("/traces"):
+                    cur = conn.cursor()
+                    cur.execute("SELECT * FROM traces WHERE name = 'queryRAG' ORDER BY start_time DESC LIMIT 50")
+                    rows = [dict(row) for row in cur.fetchall()]
+                    self._send_json(200, rows)
+
+                elif "/traces/" in p.path:
+                    trace_id = p.path.split("/")[-1]
+                    cur = conn.cursor()
+                    cur.execute("SELECT * FROM traces WHERE trace_id = ?", (trace_id,))
+                    rows = [dict(row) for row in cur.fetchall()]
+                    self._send_json(200, rows)
+
+                elif p.path.endswith("/sessions"):
+                    cur = conn.cursor()
+                    # Fix session filter
+                    s_where = where_sql.replace('project_id', 'project_id') 
+                    cur.execute(f"SELECT * FROM sessions {s_where} ORDER BY last_active DESC LIMIT 50", params)
+                    rows = [dict(row) for row in cur.fetchall()]
+                    
+                    # Parse metadata and keep snake_case to match JS dashboard
+                    results = []
+                    for r in rows:
+                        d = dict(r)
+                        if d.get('metadata'):
+                            try:
+                                d['metadata'] = json.loads(d['metadata'])
+                            except:
+                                d['metadata'] = {}
+                        else:
+                            d['metadata'] = {}
+                        results.append(d)
+                        
+                    self._send_json(200, results)
+                
+                else:
+                    self._send_json(404, {"error": "Unknown endpoint"})
+
+            except Exception as e:
+                self._send_json(500, {"error": str(e)})
+            finally:
+                conn.close()
+            return
+
+        # --- Legacy Config UI ---
         if p.path == "/" or p.path == "/index.html":
             self._serve_static("index.html", "text/html; charset=utf-8")
             return
@@ -128,7 +266,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self.send_error(404)
 
-def start(config_path, host="127.0.0.1", port=8765, open_browser=True):
+def start(config_path, mode='webconfig', host="127.0.0.1", port=8765, open_browser=True):
     server = None
     while server is None:
         try:
@@ -143,6 +281,8 @@ def start(config_path, host="127.0.0.1", port=8765, open_browser=True):
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     url = f"http://{host}:{port}/"
+    if mode == 'dashboard':
+        url = f"http://{host}:{port}/dashboard"
     print(f"Vectra WebConfig running at {url}")
     if open_browser:
         try:

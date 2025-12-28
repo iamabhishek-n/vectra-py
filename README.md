@@ -4,7 +4,7 @@ A production-ready, provider-agnostic Python SDK for End-to-End RAG (Retrieval-A
 
 ## Features
 
-*   **Multi-Provider Support**: First-class support for **OpenAI**, **Gemini**, and **Anthropic**.
+*   **Multi-Provider Support**: First-class support for **OpenAI**, **Gemini**, **Anthropic**, **OpenRouter**, and **Hugging Face**.
 *   **Async First**: Built on `asyncio` for non-blocking I/O (files & network).
 *   **Modular Vector Store**:
     *   **Prisma**: Use your existing PostgreSQL database with `pgvector` via `prisma-client-py`.
@@ -30,6 +30,7 @@ A production-ready, provider-agnostic Python SDK for End-to-End RAG (Retrieval-A
 *   **Conversation Memory**: Built-in chat history management for context-aware multi-turn conversations.
 *   **Production Evaluation**: Integrated evaluation module to measure RAG quality (Faithfulness, Relevance).
 *   **Local LLMs**: First-class support for **Ollama** for local/offline development.
+*   **Web Configuration UI**: Visual generator to create and validate your configuration file (`vectra webconfig`).
 
 ---
 
@@ -147,6 +148,13 @@ config = VectraConfig(
   - `enrichment`: bool; generate `summary`, `keywords`, `hypothetical_questions`
 - Callbacks
   - `callbacks`: list of handlers; `LoggingCallbackHandler` or `StructuredLoggingCallbackHandler`
+- Observability
+  - `enabled`: bool; enable SQLite-based observability (default: False)
+  - `sqlite_path`: str; path to SQLite database file (default: 'vectra-observability.db')
+  - `project_id`: str; project identifier for multi-project support (default: 'default')
+  - `track_metrics`: bool; track latency and other metrics
+  - `track_traces`: bool; track detailed workflow traces
+  - `session_tracking`: bool; track chat sessions
 
 
 ### 2. Initialization & Ingestion
@@ -565,6 +573,28 @@ class MyLogger:
         print('Retrieval start:', query)
 config = VectraConfig(callbacks=[MyLogger()])
 ```
+
+### Observability
+
+Built-in SQLite-based observability to track metrics, traces, and sessions.
+
+```python
+config = VectraConfig(
+    observability={
+        'enabled': True,
+        'sqlite_path': 'vectra-observability.db',
+        'project_id': 'my-project',
+        'track_metrics': True,
+        'track_traces': True,
+        'session_tracking': True
+    }
+)
+```
+
+This tracks:
+- **Metrics**: Latency (ingest, query).
+- **Traces**: Detailed spans for retrieval, generation, and ingestion workflows.
+- **Sessions**: Chat session history and last query tracking.
 
 ### Vector Stores
 - Prisma (Postgres + pgvector), Chroma, Qdrant, Milvus.

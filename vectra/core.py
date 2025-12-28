@@ -3,7 +3,9 @@ import re
 import hashlib
 import asyncio
 import os
+import uuid
 from .config import VectraConfig, ProviderType, ChunkingStrategy, RetrievalStrategy
+from .observability import SQLiteLogger
 from .processor import DocumentProcessor
 from .backends.openai import OpenAIBackend
 from .backends.gemini import GeminiBackend
@@ -24,6 +26,9 @@ class VectraClient:
         self.callbacks = config.callbacks or []
         self._embedding_cache: Dict[str, List[float]] = {}
         
+        # Initialize observability
+        self.logger = SQLiteLogger(config.observability)
+
         self.embedder = self._create_embedder()
         self.llm = self._create_llm(config.llm)
         
@@ -119,6 +124,11 @@ class VectraClient:
         try:
             import time
             t0 = time.time()
+            trace_id = str(uuid.uuid4())
+            root_span_id = str(uuid.uuid4())
+            provider = self.config.embedding.provider
+            model_name = self.config.embedding.model_name
+            
             self._trigger('on_ingest_start', file_path)
             
             abs_path = os.path.abspath(file_path)
@@ -292,8 +302,35 @@ class VectraClient:
             duration_ms = int((time.time() - t0) * 1000)
             self._trigger('on_ingest_end', file_path, len(chunks), duration_ms)
             
+            self.logger.log_trace({
+                'trace_id': trace_id,
+                'span_id': root_span_id,
+                'name': 'ingest_documents',
+                'start_time': int(t0 * 1000),
+                'end_time': int(time.time() * 1000),
+                'input': {'file_path': file_path},
+                'output': {'chunks': len(chunks), 'duration_ms': duration_ms},
+                'attributes': {'file_size': size},
+                'provider': provider,
+                'model_name': model_name
+            })
+            self.logger.log_metric({'name': 'ingest_latency', 'value': duration_ms, 'tags': {'type': 'single_file'}})
+            
         except Exception as e:
             self._trigger('on_error', e)
+            if 'trace_id' in locals():
+                 self.logger.log_trace({
+                    'trace_id': trace_id,
+                    'span_id': root_span_id,
+                    'name': 'ingest_documents',
+                    'start_time': int(t0 * 1000),
+                    'end_time': int(time.time() * 1000),
+                    'input': {'file_path': file_path},
+                    'error': {'message': str(e)},
+                    'status': 'error',
+                    'provider': provider,
+                    'model_name': model_name
+                })
             raise e
 
     async def list_documents(self, filter: Optional[Dict[str, Any]] = None, limit: int = 100) -> List[Dict[str, Any]]:
@@ -442,8 +479,18 @@ class VectraClient:
         return out
 
     async def query_rag(self, query: str, filter: Optional[Dict] = None, stream: bool = False, session_id: Optional[str] = None) -> Dict[str, Any] | AsyncGenerator[str, None]:
+        trace_id = str(uuid.uuid4())
+        root_span_id = str(uuid.uuid4())
+        
+        provider = self.config.llm.provider
+        model_name = self.config.llm.model_name
+
+        if session_id:
+             self.logger.update_session(session_id, None, {'last_query': query})
+
         try:
             import time
+            t_start = time.time()
             t_ret = time.time()
             self._trigger('on_retrieval_start', query)
             
@@ -490,6 +537,21 @@ class VectraClient:
                 
             self._trigger('on_retrieval_end', len(docs), int((time.time() - t_ret) * 1000))
             
+            embedding_provider = self.config.embedding.provider
+            embedding_model_name = self.config.embedding.model_name
+            self.logger.log_trace({
+                'trace_id': trace_id,
+                'span_id': str(uuid.uuid4()),
+                'parent_span_id': root_span_id,
+                'name': 'retrieval',
+                'start_time': int(t_ret * 1000),
+                'end_time': int(time.time() * 1000),
+                'input': {'query': query, 'filter': filter, 'strategy': strategy},
+                'output': {'documents_found': len(docs)},
+                'provider': embedding_provider,
+                'model_name': embedding_model_name
+            })
+
             terms = [t for t in re.findall(r"[a-zA-Z0-9]+", query.lower()) if len(t) > 2]
             boosted = []
             for d in docs:
@@ -531,6 +593,18 @@ class VectraClient:
             system_inst = "You are a helpful RAG assistant."
             if stream:
                 # Streaming Logic
+                self.logger.log_trace({
+                    'trace_id': trace_id,
+                    'span_id': str(uuid.uuid4()),
+                    'parent_span_id': root_span_id,
+                    'name': 'generation_stream_start',
+                    'start_time': int(t_gen * 1000),
+                    'end_time': int(time.time() * 1000),
+                    'input': {'prompt': prompt},
+                    'output': {'stream': True},
+                    'provider': provider,
+                    'model_name': model_name
+                })
                 return self.llm.generate_stream(prompt, system_inst) # Need to implement this in LLMs
             else:
                 answer = await self.llm.generate(prompt, system_inst)
@@ -543,7 +617,44 @@ class VectraClient:
                         else:
                             add_msg(session_id, 'user', query)
                             add_msg(session_id, 'assistant', str(answer))
-                self._trigger('on_generation_end', answer, int((time.time() - t_gen) * 1000))
+                
+                gen_ms = int((time.time() - t_gen) * 1000)
+                self._trigger('on_generation_end', answer, gen_ms)
+                
+                prompt_chars = len(prompt)
+                answer_chars = len(str(answer))
+
+                self.logger.log_trace({
+                    'trace_id': trace_id,
+                    'span_id': str(uuid.uuid4()),
+                    'parent_span_id': root_span_id,
+                    'name': 'generation',
+                    'start_time': int(t_gen * 1000),
+                    'end_time': int(time.time() * 1000),
+                    'input': {'prompt': prompt},
+                    'output': {'answer': str(answer)[:1000]},
+                    'attributes': {'prompt_chars': prompt_chars, 'completion_chars': answer_chars},
+                    'provider': provider,
+                    'model_name': model_name
+                })
+                
+                self.logger.log_metric({'name': 'prompt_chars', 'value': prompt_chars})
+                self.logger.log_metric({'name': 'completion_chars', 'value': answer_chars})
+
+                self.logger.log_trace({
+                    'trace_id': trace_id,
+                    'span_id': root_span_id,
+                    'name': 'query_rag',
+                    'start_time': int(t_start * 1000),
+                    'end_time': int(time.time() * 1000),
+                    'input': {'query': query, 'session_id': session_id},
+                    'output': {'success': True},
+                    'attributes': {'retrieval_ms': int((t_gen - t_ret) * 1000), 'gen_ms': gen_ms, 'doc_count': len(docs)},
+                    'provider': provider,
+                    'model_name': model_name
+                })
+                self.logger.log_metric({'name': 'query_latency', 'value': int((time.time() - t_start) * 1000), 'tags': {'type': 'total'}})
+
                 if getattr(self.config, 'generation', None) and self.config.generation.get('output_format') == 'json':
                     try:
                         import json
@@ -555,6 +666,17 @@ class VectraClient:
             
         except Exception as e:
             self._trigger('on_error', e)
+            if 'trace_id' in locals():
+                self.logger.log_trace({
+                    'trace_id': trace_id,
+                    'span_id': root_span_id,
+                    'name': 'query_rag',
+                    'start_time': int(t_start * 1000) if 't_start' in locals() else int(time.time() * 1000),
+                    'end_time': int(time.time() * 1000),
+                    'input': {'query': query},
+                    'error': {'message': str(e)},
+                    'status': 'error'
+                })
             raise e
 
     async def evaluate(self, test_set: List[Dict[str, str]]) -> List[Dict[str, Any]]:

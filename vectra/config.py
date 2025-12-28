@@ -76,6 +76,15 @@ class DatabaseConfig(BaseModel):
     column_map: Optional[Dict[str, str]] = {"content": "content", "vector": "vector", "metadata": "metadata"}
     client_instance: Any  # Prisma client, Chroma client, etc.
 
+class ObservabilityConfig(BaseModel):
+    enabled: bool = False
+    sqlite_path: str = 'vectra-observability.db'
+    project_id: str = 'default'
+    track_metrics: bool = True
+    track_traces: bool = True
+    track_logs: bool = True
+    session_tracking: bool = True
+
 class VectraConfig(BaseModel):
     embedding: EmbeddingConfig
     llm: LLMConfig
@@ -92,3 +101,4 @@ class VectraConfig(BaseModel):
     generation: Optional[Dict[str, Any]] = None
     prompts: Optional[Dict[str, Any]] = None
     tracing: Optional[Dict[str, Any]] = None
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
