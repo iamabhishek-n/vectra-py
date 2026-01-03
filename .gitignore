@@ -1,2 +1,4 @@
 .vevn/
 __pycache__/
+build/
+dist/
