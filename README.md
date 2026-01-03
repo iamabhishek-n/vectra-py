@@ -8,6 +8,7 @@ A production-ready, provider-agnostic Python SDK for End-to-End RAG (Retrieval-A
 *   **Async First**: Built on `asyncio` for non-blocking I/O (files & network).
 *   **Modular Vector Store**:
     *   **Prisma**: Use your existing PostgreSQL database with `pgvector` via `prisma-client-py`.
+    *   **Native PostgreSQL**: Direct connection to PostgreSQL using `asyncpg` (no ORM required).
     *   **ChromaDB**: Native support for the open-source vector database.
     *   **Qdrant & Milvus**: Additional backends for portability.
     *   **Extensible**: Easily add others by subclassing `VectorStore`.
@@ -52,7 +53,7 @@ python -m vectra.cli ingest ./docs --config=./config.json
 ```
 
 **Requirements:**
-`pypdf`, `mammoth`, `openpyxl`, `openai`, `google-generativeai`, `anthropic`, `pydantic`, `prisma`, `chromadb`
+`pypdf`, `mammoth`, `openpyxl`, `openai`, `google-generativeai`, `anthropic`, `pydantic`, `prisma`, `chromadb`, `asyncpg`
 
 ---
 

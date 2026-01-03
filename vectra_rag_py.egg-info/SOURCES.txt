@@ -20,6 +20,7 @@ vectra/backends/milvus_store.py
 vectra/backends/ollama.py
 vectra/backends/openai.py
 vectra/backends/openrouter.py
+vectra/backends/postgres_store.py
 vectra/backends/prisma_store.py
 vectra/backends/qdrant_store.py
 vectra_rag_py.egg-info/PKG-INFO

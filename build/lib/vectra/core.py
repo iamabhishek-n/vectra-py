@@ -204,28 +204,24 @@ class VectraClient:
             documents = []
             for i, content in enumerate(chunks):
                 md = metas[i] if i < len(metas) else {}
-                meta = {
-                    'source': file_path,
-                    'absolutePath': abs_path,
-                    'fileMD5': file_md5,
-                    'fileSHA256': file_sha256,
-                    'fileSize': size,
-                    'lastModified': mtime,
-                    'chunk_index': i,
-                    'sha256': hashes[i],
-                    'fileType': md.get('fileType'),
-                    'docTitle': md.get('docTitle'),
-                    'pageFrom': md.get('pageFrom'),
-                    'pageTo': md.get('pageTo'),
-                    'section': md.get('section')
-                }
-                # Filter None values for ChromaDB compatibility
-                meta = {k: v for k, v in meta.items() if v is not None}
-                
                 documents.append({
                     'content': content,
                     'embedding': embeddings[i],
-                    'metadata': meta
+                    'metadata': {
+                        'source': file_path,
+                        'absolutePath': abs_path,
+                        'fileMD5': file_md5,
+                        'fileSHA256': file_sha256,
+                        'fileSize': size,
+                        'lastModified': mtime,
+                        'chunk_index': i,
+                        'sha256': hashes[i],
+                        'fileType': md.get('fileType'),
+                        'docTitle': md.get('docTitle'),
+                        'pageFrom': md.get('pageFrom'),
+                        'pageTo': md.get('pageTo'),
+                        'section': md.get('section')
+                    }
                 })
 
             if getattr(self.config, 'metadata', None) and self.config.metadata.get('enrichment'): 

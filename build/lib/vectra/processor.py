@@ -177,12 +177,6 @@ class DocumentProcessor:
                 response = await self.agentic_llm.generate(prompt)
                 # Cleanup JSON
                 clean_json = response.replace("```json", "").replace("```", "").strip()
-                # Find the first [ and last ]
-                start = clean_json.find('[')
-                end = clean_json.rfind(']')
-                if start != -1 and end != -1:
-                    clean_json = clean_json[start:end+1]
-                
                 parsed = json.loads(clean_json)
                 if isinstance(parsed, list):
                     final_chunks.extend(parsed)

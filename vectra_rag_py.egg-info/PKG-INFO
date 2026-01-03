@@ -1,14 +1,14 @@
 Metadata-Version: 2.4
 Name: vectra-rag-py
-Version: 0.9.0
+Version: 0.9.7
 Summary: A production-ready, provider-agnostic Python SDK for End-to-End RAG pipelines.
 Author-email: Abhishek N <astroabhi.abhi@gmail.com>
 License: MIT
 Project-URL: Homepage, https://github.com/iamabhishek-n/vectra-py
 Project-URL: Issues, https://github.com/iamabhishek-n/vectra-py/issues
-Keywords: rag,llm,openai,anthropic,gemini,vector-database
+Keywords: rag,llm,openai,anthropic,gemini,vector-database,vectrasdk
 Classifier: Programming Language :: Python :: 3
-Classifier: License :: OSI Approved :: MIT License
+Classifier: License :: OSI Approved :: GNU General Public License v3 (GPLv3)
 Classifier: Operating System :: OS Independent
 Requires-Python: >=3.8
 Description-Content-Type: text/markdown
@@ -16,12 +16,13 @@ Requires-Dist: pypdf
 Requires-Dist: mammoth
 Requires-Dist: openpyxl
 Requires-Dist: openai
-Requires-Dist: google-generativeai
+Requires-Dist: google-genai
 Requires-Dist: anthropic
 Requires-Dist: pydantic
 Requires-Dist: prisma
 Requires-Dist: chromadb
 Requires-Dist: requests
+Requires-Dist: asyncpg
 
 # Vectra (Python)
 
@@ -33,6 +34,7 @@ A production-ready, provider-agnostic Python SDK for End-to-End RAG (Retrieval-A
 *   **Async First**: Built on `asyncio` for non-blocking I/O (files & network).
 *   **Modular Vector Store**:
     *   **Prisma**: Use your existing PostgreSQL database with `pgvector` via `prisma-client-py`.
+    *   **Native PostgreSQL**: Direct connection to PostgreSQL using `asyncpg` (no ORM required).
     *   **ChromaDB**: Native support for the open-source vector database.
     *   **Qdrant & Milvus**: Additional backends for portability.
     *   **Extensible**: Easily add others by subclassing `VectorStore`.
@@ -77,7 +79,7 @@ python -m vectra.cli ingest ./docs --config=./config.json
 ```
 
 **Requirements:**
-`pypdf`, `mammoth`, `openpyxl`, `openai`, `google-generativeai`, `anthropic`, `pydantic`, `prisma`, `chromadb`
+`pypdf`, `mammoth`, `openpyxl`, `openai`, `google-generativeai`, `anthropic`, `pydantic`, `prisma`, `chromadb`, `asyncpg`
 
 ---
 

@@ -5,10 +5,6 @@ from google import genai
 from google.genai import types
 from ..config import EmbeddingConfig, LLMConfig
 
-import logging
-
-logger = logging.getLogger(__name__)
-
 class GeminiBackend:
     def __init__(self, config: LLMConfig | EmbeddingConfig):
         self.config = config
@@ -22,14 +18,12 @@ class GeminiBackend:
             try:
                 return await fn()
             except Exception as e:
-                logger.error(f"Gemini API error (attempt {i+1}/{retries}): {e}")
                 if i == retries - 1: raise e
                 await asyncio.sleep(1 * (2 ** i))
 
     async def embed_documents(self, texts: List[str]) -> List[List[float]]:
         embeddings = []
         BATCH_SIZE = 100
-        logger.info(f"Embedding {len(texts)} documents with model {self.config.model_name}")
         for i in range(0, len(texts), BATCH_SIZE):
             batch = texts[i:i + BATCH_SIZE]
             

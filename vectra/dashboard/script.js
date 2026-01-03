@@ -93,7 +93,7 @@ async function loadDashboardData() {
     document.getElementById('stat-total-req').textContent = stats.totalRequests || 0;
     document.getElementById('stat-avg-latency').textContent = Math.round(stats.avgLatency || 0);
     document.getElementById('stat-tokens').textContent = ((stats.totalPromptChars || 0) + (stats.totalCompletionChars || 0)).toLocaleString();
-    document.getElementById('stat-errors').textContent = '0%'; // Placeholder for now
+    document.getElementById('stat-errors').textContent = (stats.errorRate !== undefined ? Math.round(stats.errorRate) : 0) + '%';
 
     // Update Charts
     updateCharts(stats.history);

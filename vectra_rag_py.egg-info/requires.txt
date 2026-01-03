@@ -2,9 +2,10 @@ pypdf
 mammoth
 openpyxl
 openai
-google-generativeai
+google-genai
 anthropic
 pydantic
 prisma
 chromadb
 requests
+asyncpg

@@ -2,12 +2,12 @@ import argparse
 import asyncio
 import json
 import os
-from .config import VectraConfig
+from .config import RAGConfig
 from .webconfig_server import start as start_webconfig
 
 def load_config(path):
     with open(path, 'r', encoding='utf-8') as f:
-        return VectraConfig.model_validate(json.load(f))
+        return RAGConfig.model_validate(json.load(f))
 
 async def main_async():
     parser = argparse.ArgumentParser(prog='vectra')
@@ -32,10 +32,10 @@ async def main_async():
         raise SystemExit('--config is required for ingest/query')
         
     # Lazy import to avoid hard dependencies for webconfig
-    from .core import VectraClient
+    from .core import RAGClient
     
     cfg = load_config(args.config)
-    client = VectraClient(cfg)
+    client = RAGClient(cfg)
     if args.cmd == 'ingest':
         await client.ingest_documents(os.path.abspath(args.target))
         print('Ingestion complete')

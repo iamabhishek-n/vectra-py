@@ -5,7 +5,7 @@ import webbrowser
 import sqlite3
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from .config import VectraConfig, ProviderType, ChunkingStrategy, RetrievalStrategy
+from .config import RAGConfig, ProviderType, ChunkingStrategy, RetrievalStrategy
 
 def _get_db_connection(config_path):
     try:
@@ -103,13 +103,7 @@ class _Handler(BaseHTTPRequestHandler):
         p = urlparse(self.path)
         
         # --- Dashboard Routes ---
-        if p.path == "/dashboard":
-            self.send_response(301)
-            self.send_header('Location', '/dashboard/')
-            self.end_headers()
-            return
-            
-        if p.path == "/dashboard/":
+        if p.path == "/dashboard" or p.path == "/dashboard/":
             self._serve_static("index.html", "text/html; charset=utf-8", folder="dashboard")
             return
             
@@ -119,13 +113,11 @@ class _Handler(BaseHTTPRequestHandler):
             if asset_name.endswith(".css"): content_type = "text/css"
             elif asset_name.endswith(".js"): content_type = "application/javascript"
             elif asset_name.endswith(".html"): content_type = "text/html"
-            elif asset_name.endswith(".png"): content_type = "image/png"
             self._serve_static(asset_name, content_type, folder="dashboard")
             return
 
         # --- Observability API ---
         if p.path.startswith("/api/observability/"):
-            print(f"DEBUG: Handling observability request: {p.path}")
             conn = _get_db_connection(self.server.config_path)
             if not conn:
                 self._send_json(400, {"error": "Observability not enabled or DB not found"})
@@ -149,7 +141,7 @@ class _Handler(BaseHTTPRequestHandler):
                     cur = conn.cursor()
                     
                     # Total Requests
-                    cur.execute(f"SELECT COUNT(*) as count FROM traces WHERE name = 'query_rag' {and_sql.replace('AND', 'WHERE', 1) if not where_sql else and_sql}", params)
+                    cur.execute(f"SELECT COUNT(*) as count FROM traces WHERE name = 'queryRAG' {and_sql.replace('AND', 'WHERE', 1) if not where_sql else and_sql}", params)
                     total_req = cur.fetchone()['count']
                     
                     # Avg Latency
@@ -159,11 +151,6 @@ class _Handler(BaseHTTPRequestHandler):
                     # Token Counts
                     cur.execute(f"SELECT SUM(value) as val FROM metrics WHERE name = 'prompt_chars' {and_sql}", params)
                     tokens_p = cur.fetchone()['val'] or 0
-                    
-                    # Error Rate
-                    cur.execute(f"SELECT COUNT(*) as count FROM traces WHERE name = 'query_rag' AND status = 'error' {and_sql}", params)
-                    error_count = cur.fetchone()['count']
-                    error_rate = (error_count / total_req * 100) if total_req > 0 else 0
                     
                     cur.execute(f"SELECT SUM(value) as val FROM metrics WHERE name = 'completion_chars' {and_sql}", params)
                     tokens_c = cur.fetchone()['val'] or 0
@@ -185,20 +172,12 @@ class _Handler(BaseHTTPRequestHandler):
                         "avgLatency": avg_lat,
                         "totalPromptChars": tokens_p,
                         "totalCompletionChars": tokens_c,
-                        "errorRate": error_rate,
                         "history": history
                     })
                 
-                elif p.path.endswith("/projects"):
-                    cur = conn.cursor()
-                    cur.execute("SELECT DISTINCT project_id FROM traces")
-                    rows = cur.fetchall()
-                    projects = [row['project_id'] for row in rows if row['project_id']]
-                    self._send_json(200, projects)
-
                 elif p.path.endswith("/traces"):
                     cur = conn.cursor()
-                    cur.execute("SELECT * FROM traces WHERE name = 'query_rag' ORDER BY start_time DESC LIMIT 50")
+                    cur.execute("SELECT * FROM traces WHERE name = 'queryRAG' ORDER BY start_time DESC LIMIT 50")
                     rows = [dict(row) for row in cur.fetchall()]
                     self._send_json(200, rows)
 
@@ -259,7 +238,7 @@ class _Handler(BaseHTTPRequestHandler):
                 try:
                     with open(cfg_path, "r", encoding="utf-8") as f:
                         raw = json.load(f)
-                    val = VectraConfig.model_validate(raw)
+                    val = RAGConfig.model_validate(raw)
                     self._send_json(200, val.model_dump())
                     return
                 except Exception as e:
@@ -276,7 +255,7 @@ class _Handler(BaseHTTPRequestHandler):
             body = self.rfile.read(ln) if ln > 0 else b"{}"
             try:
                 raw = json.loads(body.decode("utf-8"))
-                val = VectraConfig.model_validate(raw)
+                val = RAGConfig.model_validate(raw)
                 out = val.model_dump(exclude_none=True)
                 os.makedirs(os.path.dirname(self.server.config_path) or ".", exist_ok=True)
                 with open(self.server.config_path, "w", encoding="utf-8") as f:
