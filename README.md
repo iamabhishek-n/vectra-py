@@ -2,6 +2,9 @@
 
 A production-ready, provider-agnostic Python SDK for End-to-End RAG (Retrieval-Augmented Generation) pipelines.
 
+![GitHub Release](https://img.shields.io/github/v/release/iamabhishek-n/vectra-py)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/vectra-rag-py?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/vectra-rag-py)
+
 ## Features
 
 *   **Multi-Provider Support**: First-class support for **OpenAI**, **Gemini**, **Anthropic**, **OpenRouter**, and **Hugging Face**.
