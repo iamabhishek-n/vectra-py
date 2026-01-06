@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: vectra-rag-py
-Version: 0.9.8
+Version: 0.9.10
 Summary: A production-ready, provider-agnostic Python SDK for End-to-End RAG pipelines.
 Author-email: Abhishek N <astroabhi.abhi@gmail.com>
 License: MIT
@@ -48,7 +48,6 @@ If you find this project useful, consider supporting it:<br>
 * [4. Installation](#4-installation)
 * [5. Quick Start](#5-quick-start)
 * [6. Core Concepts](#6-core-concepts)
-
   * [Providers](#providers)
   * [Vector Stores](#vector-stores)
   * [Chunking](#chunking)
@@ -63,7 +62,6 @@ If you find this project useful, consider supporting it:<br>
 * [10. Conversation Memory](#10-conversation-memory)
 * [11. Evaluation & Quality Measurement](#11-evaluation--quality-measurement)
 * [12. CLI](#12-cli)
-
   * [Ingest & Query](#ingest--query)
   * [WebConfig (Config Generator UI)](#webconfig-config-generator-ui)
   * [Observability Dashboard](#observability-dashboard)
@@ -161,6 +159,20 @@ pip install vectra-py
 uv pip install vectra-py
 ```
 
+### Backends
+
+```bash
+# Prisma Client Python – https://prisma.brendonovich.dev
+pip install prisma-client-py
+# ChromaDB – https://docs.trychroma.com
+pip install chromadb
+# Qdrant Python Client – https://qdrant.tech/documentation
+pip install qdrant-client
+# Milvus Python SDK – https://milvus.io/docs
+pip install pymilvus
+```
+
+
 ### CLI
 
 ```bash
@@ -179,11 +191,10 @@ Vectra depends on:
 ## 5. Quick Start
 
 ```python
-from prisma import Prisma
+import asyncpg
 from vectra import VectraClient, VectraConfig, ProviderType
 
-prisma = Prisma()
-await prisma.connect()
+pool = await asyncpg.create_pool(os.getenv('DATABASE_URL'))
 
 config = VectraConfig(
     embedding={
@@ -194,12 +205,13 @@ config = VectraConfig(
     llm={
         'provider': ProviderType.GEMINI,
         'api_key': os.getenv('GOOGLE_API_KEY'),
-        'model_name': 'gemini-1.5-pro-latest'
+        'model_name': 'gemini-2.5-flash'
     },
     database={
-        'type': 'prisma',
-        'client_instance': prisma,
-        'table_name': 'Document'
+        'type': 'postgres',
+        'client_instance': pool,
+        'table_name': 'document',
+        'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'vector' }
     }
 )
 
@@ -273,13 +285,13 @@ Use `dimensions` when using pgvector to avoid runtime mismatches.
 llm={
   'provider': ProviderType.GEMINI,
   'api_key': os.getenv('GOOGLE_API_KEY'),
-  'model_name': 'gemini-1.5-pro-latest',
+  'model_name': 'gemini-2.5-flash',
   'temperature': 0.3,
   'max_tokens': 1024
 }
 ```
 
-Used for generation, reranking, HyDE, Multi-Query, and agentic chunking.
+Used for generation
 
 ---
 
@@ -312,7 +324,8 @@ database={
 database={
   'type': 'chroma',
   'client_instance': chroma_client,  # chromadb.Client or PersistentClient
-  'table_name': 'rag_collection'
+  'table_name': 'rag_collection',
+  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'embedding' }
 }
 ```
 
@@ -321,7 +334,8 @@ database={
 database={
   'type': 'qdrant',
   'client_instance': qdrant_client,  # qdrant_client.QdrantClient
-  'table_name': 'rag_collection'
+  'table_name': 'rag_collection',
+  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'embedding' }
 }
 ```
 
@@ -330,7 +344,8 @@ database={
 database={
   'type': 'milvus',
   'client_instance': milvus_client,  # pymilvus client
-  'table_name': 'rag_collection'
+  'table_name': 'rag_collection',
+  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'embedding' }
 }
 ```
 

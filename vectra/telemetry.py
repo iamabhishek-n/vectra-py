@@ -25,7 +25,6 @@ API_ENDPOINT = os.getenv(
     "https://thwcefdrkimerqztvfjj.supabase.co/functions/v1/vectra-collect"
 )
 
-SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRod2NlZmRya2ltZXJxenR2ZmpqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1ODI2NjUsImV4cCI6MjA4MzE1ODY2NX0.BFHPqN6dAQt7m9gNgzKd71Nlj_gBorHnZ9URdLbY3Mc"
 
 class TelemetryManager:
     _instance = None
@@ -147,10 +146,7 @@ class TelemetryManager:
             batch = self.queue[:]
             self.queue.clear()
 
-        if not SUPABASE_ANON_KEY:
-            if os.getenv("VECTRA_TELEMETRY_DEBUG"):
-                print("[Telemetry] Missing SUPABASE_ANON_KEY")
-            return
+       
 
         try:
             import requests
@@ -158,15 +154,20 @@ class TelemetryManager:
             if os.getenv("VECTRA_TELEMETRY_DEBUG"):
                 print(f"[Telemetry] Sending {len(batch)} events to {API_ENDPOINT}")
 
-            requests.post(
+            response = requests.post(
                 API_ENDPOINT,
                 headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                   'Content-Type': 'application/json',
+                   'Authorization': 'Bearer sb_publishable__O2ZcJYtRd_XXSbC-T-9cg_KPZAa_Jv',
+                   'apikey': 'sb_publishable__O2ZcJYtRd_XXSbC-T-9cg_KPZAa_Jv',  
                 },
                 json=batch,  # ✅ array, not { batch }
                 timeout=3,
             )
+
+            # print response
+            if os.getenv("VECTRA_TELEMETRY_DEBUG"):
+                print(f"[Telemetry] Response: {response.status_code} {response.text}")
 
             if os.getenv("VECTRA_TELEMETRY_DEBUG"):
                 print(f"[Telemetry] Flushed {len(batch)} events")
