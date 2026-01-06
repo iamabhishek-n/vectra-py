@@ -6,6 +6,7 @@ import os
 import uuid
 from .config import VectraConfig, ProviderType, ChunkingStrategy, RetrievalStrategy
 from .observability import SQLiteLogger
+from .telemetry import telemetry
 from .processor import DocumentProcessor
 from .backends.openai import OpenAIBackend
 from .backends.gemini import GeminiBackend
@@ -29,6 +30,17 @@ class VectraClient:
         
         # Initialize observability
         self.logger = SQLiteLogger(config.observability)
+
+        # Initialize telemetry
+        telemetry.init(config)
+        telemetry.track('sdk_initialized', {
+            'vector_store': config.database.type,
+            'embedding_provider': config.embedding.provider,
+            'llm_provider': config.llm.provider,
+            'observability_enabled': config.observability.enabled,
+            'memory_enabled': config.memory.get('enabled', False) if config.memory else False,
+            'session_type': config.session_type
+        })
 
         self.embedder = self._create_embedder()
         self.llm = self._create_llm(config.llm)
@@ -133,6 +145,13 @@ class VectraClient:
             model_name = self.config.embedding.model_name
             
             self._trigger('on_ingest_start', file_path)
+
+            telemetry.track('ingest_started', {
+                'source_type': 'directory' if os.path.isdir(file_path) else 'file',
+                'file_types': [] if os.path.isdir(file_path) else [os.path.splitext(file_path)[1].replace('.', '')],
+                'chunking_strategy': self.config.chunking.strategy,
+                'metadata_enrichment': bool(getattr(self.config, 'metadata', None) and self.config.metadata.get('enrichment'))
+            })
             
             abs_path = os.path.abspath(file_path)
             try:
@@ -309,6 +328,12 @@ class VectraClient:
             duration_ms = int((time.time() - t0) * 1000)
             self._trigger('on_ingest_end', file_path, len(chunks), duration_ms)
             
+            telemetry.track('ingest_completed', {
+                'chunk_count_bucket': '1-50' if len(chunks) <= 50 else '50-200' if len(chunks) <= 200 else '200+',
+                'duration_ms_bucket': '0-1s' if duration_ms < 1000 else '1-5s' if duration_ms < 5000 else '5s+',
+                'cached_embeddings': False # Track if any were cached? Not easy here without counting.
+            })
+
             self.logger.log_trace({
                 'trace_id': trace_id,
                 'span_id': root_span_id,
@@ -324,6 +349,10 @@ class VectraClient:
             self.logger.log_metric({'name': 'ingest_latency', 'value': duration_ms, 'tags': {'type': 'single_file'}})
             
         except Exception as e:
+            telemetry.track('error_occurred', {
+                'stage': 'ingestion',
+                'error_type': 'unknown' # Could be more specific based on exception type
+            })
             self._trigger('on_error', e)
             if 'trace_id' in locals():
                  self.logger.log_trace({
@@ -663,6 +692,15 @@ class VectraClient:
                 })
                 self.logger.log_metric({'name': 'query_latency', 'value': int((time.time() - t_start) * 1000), 'tags': {'type': 'total'}})
 
+                telemetry.track('query_executed', {
+                    'query_mode': 'rag',
+                    'retrieval_strategy': strategy,
+                    'reranking_enabled': bool(self.config.reranking and self.config.reranking.enabled),
+                    'streaming': stream,
+                    'memory_used': bool(self.history and session_id),
+                    'result_count': len(docs)
+                })
+
                 if getattr(self.config, 'generation', None) and self.config.generation.get('output_format') == 'json':
                     try:
                         import json
@@ -673,6 +711,10 @@ class VectraClient:
                 return {'answer': answer, 'sources': [d['metadata'] for d in docs]}
             
         except Exception as e:
+            telemetry.track('error_occurred', {
+                'stage': 'retrieval' if 't_ret' in locals() and 't_gen' not in locals() else 'generation',
+                'error_type': 'unknown'
+            })
             self._trigger('on_error', e)
             if 'trace_id' in locals():
                 self.logger.log_trace({
@@ -688,6 +730,9 @@ class VectraClient:
             raise e
 
     async def evaluate(self, test_set: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+        telemetry.track('evaluation_run', {
+            'dataset_size_bucket': '1-5' if len(test_set) <= 5 else '5-20' if len(test_set) <= 20 else '20+'
+        })
         report: List[Dict[str, Any]] = []
         for item in test_set:
             res = await self.query_rag(item['question'])

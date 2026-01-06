@@ -6,6 +6,7 @@ import sqlite3
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .config import VectraConfig, ProviderType, ChunkingStrategy, RetrievalStrategy
+from .telemetry import telemetry
 
 def _get_db_connection(config_path):
     try:
@@ -304,6 +305,11 @@ def start(config_path, mode='webconfig', host="127.0.0.1", port=8765, open_brows
     url = f"http://{host}:{port}/"
     if mode == 'dashboard':
         url = f"http://{host}:{port}/dashboard"
+    
+    # Try to init telemetry if not already (it's safe to call multiple times)
+    telemetry.init()
+    telemetry.track('feature_used', {'feature': mode})
+
     print(f"Vectra WebConfig running at {url}")
     if open_browser:
         try:

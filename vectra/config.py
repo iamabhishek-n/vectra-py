@@ -21,6 +21,11 @@ class RetrievalStrategy(str, Enum):
     HYBRID = 'hybrid'  # New Strategy
     MMR = 'mmr'
 
+class SessionType(str, Enum):
+    CLI = 'cli'
+    API = 'api'
+    CHAT = 'chat'
+
 class EmbeddingConfig(BaseModel):
     provider: ProviderType
     api_key: Optional[str] = None
@@ -85,6 +90,9 @@ class ObservabilityConfig(BaseModel):
     track_logs: bool = True
     session_tracking: bool = True
 
+class TelemetryConfig(BaseModel):
+    enabled: bool = True
+
 class VectraConfig(BaseModel):
     embedding: EmbeddingConfig
     llm: LLMConfig
@@ -102,3 +110,5 @@ class VectraConfig(BaseModel):
     prompts: Optional[Dict[str, Any]] = None
     tracing: Optional[Dict[str, Any]] = None
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    session_type: SessionType = SessionType.API

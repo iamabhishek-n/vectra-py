@@ -20,7 +20,6 @@ If you find this project useful, consider supporting it:<br>
 * [4. Installation](#4-installation)
 * [5. Quick Start](#5-quick-start)
 * [6. Core Concepts](#6-core-concepts)
-
   * [Providers](#providers)
   * [Vector Stores](#vector-stores)
   * [Chunking](#chunking)
@@ -35,16 +34,16 @@ If you find this project useful, consider supporting it:<br>
 * [10. Conversation Memory](#10-conversation-memory)
 * [11. Evaluation & Quality Measurement](#11-evaluation--quality-measurement)
 * [12. CLI](#12-cli)
-
   * [Ingest & Query](#ingest--query)
   * [WebConfig (Config Generator UI)](#webconfig-config-generator-ui)
   * [Observability Dashboard](#observability-dashboard)
 * [13. Observability & Callbacks](#13-observability--callbacks)
-* [14. Database Schemas & Indexing](#14-database-schemas--indexing)
-* [15. Extending Vectra](#15-extending-vectra)
-* [16. Architecture Overview](#16-architecture-overview)
-* [17. Development & Contribution Guide](#17-development--contribution-guide)
-* [18. Production Best Practices](#18-production-best-practices)
+* [14. Telemetry](#14-telemetry)
+* [15. Database Schemas & Indexing](#15-database-schemas--indexing)
+* [16. Extending Vectra](#16-extending-vectra)
+* [17. Architecture Overview](#17-architecture-overview)
+* [18. Development & Contribution Guide](#18-development--contribution-guide)
+* [19. Production Best Practices](#19-production-best-practices)
 
 ---
 
@@ -132,6 +131,20 @@ pip install vectra-py
 uv pip install vectra-py
 ```
 
+### Backends
+
+```bash
+# Prisma Client Python – https://prisma.brendonovich.dev
+pip install prisma-client-py
+# ChromaDB – https://docs.trychroma.com
+pip install chromadb
+# Qdrant Python Client – https://qdrant.tech/documentation
+pip install qdrant-client
+# Milvus Python SDK – https://milvus.io/docs
+pip install pymilvus
+```
+
+
 ### CLI
 
 ```bash
@@ -150,11 +163,10 @@ Vectra depends on:
 ## 5. Quick Start
 
 ```python
-from prisma import Prisma
+import asyncpg
 from vectra import VectraClient, VectraConfig, ProviderType
 
-prisma = Prisma()
-await prisma.connect()
+pool = await asyncpg.create_pool(os.getenv('DATABASE_URL'))
 
 config = VectraConfig(
     embedding={
@@ -165,12 +177,13 @@ config = VectraConfig(
     llm={
         'provider': ProviderType.GEMINI,
         'api_key': os.getenv('GOOGLE_API_KEY'),
-        'model_name': 'gemini-1.5-pro-latest'
+        'model_name': 'gemini-2.5-flash'
     },
     database={
-        'type': 'prisma',
-        'client_instance': prisma,
-        'table_name': 'Document'
+        'type': 'postgres',
+        'client_instance': pool,
+        'table_name': 'document',
+        'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'vector' }
     }
 )
 
@@ -244,27 +257,69 @@ Use `dimensions` when using pgvector to avoid runtime mismatches.
 llm={
   'provider': ProviderType.GEMINI,
   'api_key': os.getenv('GOOGLE_API_KEY'),
-  'model_name': 'gemini-1.5-pro-latest',
+  'model_name': 'gemini-2.5-flash',
   'temperature': 0.3,
   'max_tokens': 1024
 }
 ```
 
-Used for generation, reranking, HyDE, Multi-Query, and agentic chunking.
+Used for generation
 
 ---
 
 ### Database
 
+Supports Prisma, Chroma, Qdrant, Milvus.
+
 ```python
+# PostgreSQL (native asyncpg)
 database={
-  'type': 'prisma',
-  'client_instance': prisma,
-  'table_name': 'Document'
+  'type': 'postgres',
+  'client_instance': pg_pool,  # asyncpg.Pool or Connection
+  'table_name': 'document',
+  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'vector' }
 }
 ```
 
-Supports Prisma, Chroma, Qdrant, Milvus.
+```python
+# Prisma (Postgres via prisma-client-py)
+database={
+  'type': 'prisma',
+  'client_instance': prisma,
+  'table_name': 'Document',
+  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'embedding' }
+}
+```
+
+```python
+# ChromaDB
+database={
+  'type': 'chroma',
+  'client_instance': chroma_client,  # chromadb.Client or PersistentClient
+  'table_name': 'rag_collection',
+  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'embedding' }
+}
+```
+
+```python
+# Qdrant
+database={
+  'type': 'qdrant',
+  'client_instance': qdrant_client,  # qdrant_client.QdrantClient
+  'table_name': 'rag_collection',
+  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'embedding' }
+}
+```
+
+```python
+# Milvus
+database={
+  'type': 'milvus',
+  'client_instance': milvus_client,  # pymilvus client
+  'table_name': 'rag_collection',
+  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'embedding' }
+}
+```
 
 ---
 
@@ -322,6 +377,38 @@ memory={ 'enabled': True, 'type': 'in-memory', 'max_messages': 20 }
 ```
 
 Redis and Postgres are supported.
+
+```python
+# Redis
+memory={
+  'enabled': True,
+  'type': 'redis',
+  'max_messages': 20,
+  'redis': {
+    'client_instance': redis_client,
+    'key_prefix': 'vectra:chat:'
+  }
+}
+```
+
+```python
+# Postgres
+memory={
+  'enabled': True,
+  'type': 'postgres',
+  'max_messages': 20,
+  'postgres': {
+    'client_instance': pg_pool,  # asyncpg.Pool or Connection
+    'table_name': 'ChatMessage',
+    'column_map': {
+      'sessionId': 'sessionId',
+      'role': 'role',
+      'content': 'content',
+      'createdAt': 'createdAt'
+    }
+  }
+}
+```
 
 ---
 
@@ -423,10 +510,48 @@ Launches a local dashboard for metrics, traces, and session analysis.
 Tracks metrics, traces, and chat sessions when enabled.
 
 Callbacks allow hooking into ingestion, retrieval, reranking, and generation stages.
-
----
-
-## 14. Database Schemas & Indexing
+ 
+ ---
+ 
+ ## 14. Telemetry
+ 
+ Vectra collects anonymous usage data to help us improve the SDK, prioritize features, and detect broken versions.
+ 
+ ### What we track
+ * **Identity**: A random UUID (`distinct_id`) stored locally in `~/.vectra/telemetry.json`. **No PII, emails, IPs, or hostnames.**
+ * **Events**:
+     * `sdk_initialized`: Config shape (providers used), OS/Runtime version, session type (api/cli/chat).
+     * `ingest_started/completed`: Source type, chunking strategy, duration bucket, chunk count bucket.
+     * `query_executed`: Retrieval strategy, query mode (rag), result count, latency bucket.
+     * `feature_used`: WebConfig/Dashboard usage.
+     * `evaluation_run`: Dataset size bucket.
+     * `error_occurred`: Error type and stage (no stack traces).
+     * `cli_command_used`: Command name and flags.
+ 
+ ### Why we track it
+ * **Detect broken versions**: Spikes in `error_occurred` help us find bugs.
+ * **Measure adoption**: Helps us understand which providers (OpenAI vs Gemini) and vector stores are most popular.
+ * **Drop support safely**: We can see if anyone is still using Python 3.8 before dropping it.
+ 
+ ### How to opt-out
+ Telemetry is **enabled by default**. To disable it:
+ 
+ **Option 1: Config**
+ ```python
+ client = VectraClient(
+     VectraConfig(
+         # ...
+         telemetry={'enabled': False}
+     )
+ )
+ ```
+ 
+ **Option 2: Environment Variable**
+ Set `VECTRA_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`.
+ 
+ ---
+ 
+ ## 15. Database Schemas & Indexing
 
 ```prisma
 model Document {
@@ -440,19 +565,19 @@ model Document {
 
 ---
 
-## 15. Extending Vectra
+## 16. Extending Vectra
 
 Implement custom vector stores by extending `VectorStore`.
 
 ---
 
-## 16. Architecture Overview
+## 17. Architecture Overview
 
 Vectra follows a modular, provider-agnostic RAG architecture with clear separation of ingestion, retrieval, and generation pipelines.
 
 ---
 
-## 17. Development & Contribution Guide
+## 18. Development & Contribution Guide
 
 * Python 3.8+
 * Async-first (`asyncio`)
@@ -460,7 +585,7 @@ Vectra follows a modular, provider-agnostic RAG architecture with clear separati
 
 ---
 
-## 18. Production Best Practices
+## 19. Production Best Practices
 
 * Match embedding dimensions to pgvector
 * Prefer Hybrid retrieval

@@ -1,3 +1,4 @@
+LICENSE
 README.md
 pyproject.toml
 vectra/__init__.py
@@ -11,6 +12,7 @@ vectra/memory.py
 vectra/observability.py
 vectra/processor.py
 vectra/reranker.py
+vectra/telemetry.py
 vectra/webconfig_server.py
 vectra/backends/anthropic.py
 vectra/backends/chroma_store.py

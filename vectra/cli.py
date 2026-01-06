@@ -2,8 +2,9 @@ import argparse
 import asyncio
 import json
 import os
-from .config import VectraConfig
+from .config import VectraConfig, SessionType
 from .webconfig_server import start as start_webconfig
+from .telemetry import telemetry
 
 def load_config(path):
     with open(path, 'r', encoding='utf-8') as f:
@@ -17,12 +18,17 @@ async def main_async():
     parser.add_argument('--stream', action='store_true')
     args = parser.parse_args()
     if args.cmd == 'webconfig':
+        # Telemetry is tricky here without full config load, but we try
+        telemetry.init() 
+        telemetry.track('cli_command_used', {'command': 'webconfig', 'flags': []})
         cfg_path = args.config or os.path.join(os.getcwd(), 'vectra-config.json')
         start_webconfig(cfg_path, 'webconfig')
         await asyncio.Event().wait()
         return
 
     if args.cmd == 'dashboard':
+        telemetry.init()
+        telemetry.track('cli_command_used', {'command': 'dashboard', 'flags': []})
         cfg_path = args.config or os.path.join(os.getcwd(), 'vectra-config.json')
         start_webconfig(cfg_path, 'dashboard')
         await asyncio.Event().wait()
@@ -35,7 +41,21 @@ async def main_async():
     from .core import VectraClient
     
     cfg = load_config(args.config)
+    cfg.session_type = SessionType.CLI
+    
+    # Telemetry init happens inside VectraClient, but we want to track CLI command too
+    # We can rely on VectraClient init or do it here explicitly.
+    # VectraClient init handles enabling/disabling based on config.
+    # So we should probably do it after client creation?
+    # But track needs initialized telemetry.
+    
     client = VectraClient(cfg)
+    
+    telemetry.track('cli_command_used', {
+        'command': args.cmd,
+        'flags': ['--stream'] if args.stream else []
+    })
+
     if args.cmd == 'ingest':
         await client.ingest_documents(os.path.abspath(args.target))
         print('Ingestion complete')
@@ -48,6 +68,8 @@ async def main_async():
             print()
         else:
             print(json.dumps(res, ensure_ascii=False))
+            
+    telemetry.flush()
 
 def main():
     asyncio.run(main_async())
