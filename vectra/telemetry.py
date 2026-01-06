@@ -157,12 +157,10 @@ class TelemetryManager:
             response = requests.post(
                 API_ENDPOINT,
                 headers={
-                   'Content-Type': 'application/json',
-                   'Authorization': 'Bearer sb_publishable__O2ZcJYtRd_XXSbC-T-9cg_KPZAa_Jv',
-                   'apikey': 'sb_publishable__O2ZcJYtRd_XXSbC-T-9cg_KPZAa_Jv',  
+                   'Content-Type': 'application/json'
                 },
-                json=batch,  # ✅ array, not { batch }
-                timeout=3,
+                json=batch,
+                timeout=6,
             )
 
             # print response
