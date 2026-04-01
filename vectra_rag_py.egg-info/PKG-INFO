@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: vectra-rag-py
-Version: 0.9.10
+Version: 0.9.11
 Summary: A production-ready, provider-agnostic Python SDK for End-to-End RAG pipelines.
 Author-email: Abhishek N <astroabhi.abhi@gmail.com>
 License: MIT
@@ -24,6 +24,8 @@ Requires-Dist: prisma
 Requires-Dist: chromadb
 Requires-Dist: requests
 Requires-Dist: asyncpg
+Requires-Dist: aiohttp
+Requires-Dist: pysbd
 Dynamic: license-file
 
 # Vectra (Python)

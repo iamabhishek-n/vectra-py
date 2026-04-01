@@ -9,3 +9,5 @@ prisma
 chromadb
 requests
 asyncpg
+aiohttp
+pysbd

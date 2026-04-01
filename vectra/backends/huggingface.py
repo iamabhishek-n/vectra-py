@@ -2,7 +2,7 @@ import os
 import asyncio
 from typing import List, AsyncGenerator
 import json
-import urllib.request
+import aiohttp
 from ..config import LLMConfig
 
 class HuggingFaceBackend:
@@ -14,16 +14,14 @@ class HuggingFaceBackend:
         self.base_url = 'https://api-inference.huggingface.co/models'
 
     async def _post(self, model: str, payload: dict):
-        def _do():
-            req = urllib.request.Request(
-                url=f"{self.base_url}/{model}",
-                data=json.dumps(payload).encode('utf-8'),
-                headers={ 'Authorization': f'Bearer {self.api_key}', 'Content-Type': 'application/json' },
-                method='POST'
-            )
-            with urllib.request.urlopen(req) as resp:
-                return json.loads(resp.read().decode('utf-8'))
-        return await asyncio.to_thread(_do)
+        async with aiohttp.ClientSession() as session:
+            url = f"{self.base_url}/{model}"
+            headers = { 'Authorization': f'Bearer {self.api_key}', 'Content-Type': 'application/json' }
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise Exception(f"HF Error {resp.status}: {text}")
+                return await resp.json()
 
     async def embed_documents(self, texts: List[str]) -> List[List[float]]:
         out: List[List[float]] = []

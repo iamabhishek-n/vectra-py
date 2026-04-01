@@ -3,10 +3,11 @@ import json
 import asyncio
 import re
 import math
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
+from .config import ChunkingConfig, ChunkingStrategy
 
-# Library imports (assumed available)
+# Library imports
 try:
     from pypdf import PdfReader
 except ImportError:
@@ -20,7 +21,11 @@ try:
 except ImportError:
     openpyxl = None
 
-from .config import ChunkingStrategy, ChunkingConfig
+try:
+    import pysbd
+    _segmenter = pysbd.Segmenter(language="en", clean=False)
+except ImportError:
+    _segmenter = None
 
 class DocumentProcessor:
     def __init__(self, config: ChunkingConfig, agentic_llm=None):
@@ -34,12 +39,13 @@ class DocumentProcessor:
         return await loop.run_in_executor(self._executor, self._load_sync, file_path)
 
     def _load_sync(self, file_path: str) -> str:
+        self._last_pages = None
         ext = os.path.splitext(file_path)[1].lower()
         if ext == '.pdf':
             if not PdfReader: raise ImportError("pypdf not installed")
             reader = PdfReader(file_path)
             pages = [page.extract_text() or "" for page in reader.pages]
-            self._last_pages = pages
+            self._last_pages = [p for p in pages if p.strip()]
             return "\n".join(pages)
         
         elif ext == '.docx':
@@ -82,34 +88,50 @@ class DocumentProcessor:
         return H
 
     def recursive_split(self, text: str) -> List[str]:
-        chunks = []
-        # Match JS logic: max(500, config.chunkSize || 1000)
         size_chars = max(500, int(self.config.chunk_size) if self.config.chunk_size else 1000)
-        # Match JS logic: max(0, config.chunkOverlap || 200)
         base_overlap = max(0, int(self.config.chunk_overlap) if self.config.chunk_overlap else 200)
         
-        # Split by sentences (lookbehind for . ! ?)
-        # JS: text.split(/(?<=[.!?])\s+/)
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        
-        current = ''
-        for s in sentences:
-            candidate = f"{current} {s}" if current else s
-            if len(candidate) >= size_chars:
-                entropy = self._entropy(candidate)
-                # overlap = Math.min(baseOverlap + Math.floor(entropy * 50), Math.floor(sizeChars / 3));
-                overlap = min(base_overlap + math.floor(entropy * 50), math.floor(size_chars / 3))
-                chunks.append(candidate)
-                # current = candidate.slice(Math.max(0, candidate.length - overlap));
-                start_slice = max(0, len(candidate) - overlap)
-                current = candidate[start_slice:]
+        # 1. Page Splitting (for PDFs)
+        if self._last_pages:
+            top_level_splits = self._last_pages
+        else:
+            # 2. Markdown/Format Splitting
+            # Split by headers, code blocks, or tables
+            top_level_splits = re.split(r'(?m)^(?:#{1,6}\s+.*|```[\s\S]*?```|\|.*\|.*\|)', text)
+            top_level_splits = [s.strip() for s in top_level_splits if s.strip()]
+            if not top_level_splits:
+                top_level_splits = [text]
+
+        final_chunks = []
+        current_chunk = ""
+
+        for block in top_level_splits:
+            # 3. Sentence Splitting
+            if _segmenter:
+                sentences = _segmenter.segment(block)
             else:
-                current = candidate
-        
-        if current:
-            chunks.append(current)
-            
-        return chunks
+                # Fallback to improved regex that avoids decimals and common abbreviations
+                sentences = re.split(r'(?<!\d)\.(?!\d)(?=\s+[A-Z])|(?<=[!?])\s+', block)
+
+            for s in sentences:
+                candidate = f"{current_chunk} {s}".strip() if current_chunk else s.strip()
+                if len(candidate) >= size_chars:
+                    if current_chunk:
+                        entropy = self._entropy(current_chunk)
+                        overlap = min(base_overlap + math.floor(entropy * 50), math.floor(size_chars / 3))
+                        final_chunks.append(current_chunk)
+                        current_chunk = current_chunk[-overlap:] + " " + s.strip()
+                    else:
+                        # Single sentence longer than chunk size - force split or keep as is
+                        final_chunks.append(s.strip())
+                        current_chunk = ""
+                else:
+                    current_chunk = candidate
+
+        if current_chunk:
+            final_chunks.append(current_chunk)
+
+        return final_chunks
 
     def compute_chunk_metadata(self, file_path: str, raw_text: str, chunks: List[str]) -> List[dict]:
         ext = os.path.splitext(file_path)[1].lower()

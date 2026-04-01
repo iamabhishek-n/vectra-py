@@ -29,14 +29,12 @@ class AnthropicBackend:
         return res.content[0].text
     
     async def generate_stream(self, prompt: str, system_instruction: str = "You are a helpful assistant.") -> AsyncGenerator[dict, None]:
-        stream = await self.client.messages.create(
+        async with self.client.messages.stream(
             model=self.config.model_name,
             max_tokens=self.config.max_tokens,
             temperature=self.config.temperature,
             system=system_instruction,
             messages=[{"role": "user", "content": prompt}],
-            stream=True
-        )
-        async for chunk in stream:
-            if chunk.type == 'content_block_delta':
-                yield { 'delta': chunk.delta.text, 'finish_reason': None, 'usage': None }
+        ) as stream:
+            async for text in stream.text_stream:
+                yield { 'delta': text, 'finish_reason': None, 'usage': None }

@@ -1,5 +1,6 @@
 import uuid
-from typing import List, Dict, Any, Optional
+import asyncio
+from typing import List, Dict, Any, Optional, Tuple
 from ..interfaces import VectorStore
 from ..config import DatabaseConfig
 
@@ -7,7 +8,12 @@ class ChromaVectorStore(VectorStore):
     def __init__(self, config: DatabaseConfig):
         # Expecting 'client_instance' to be a chromadb.Client or PersistentClient
         self.client = config.client_instance
-        self.collection_name = config.table_name or "rag_collection"
+        if self.client is None:
+            import chromadb
+            path = getattr(config, 'path', './chroma_db')
+            self.client = chromadb.PersistentClient(path=path)
+            
+        self.collection_name = config.table_name or getattr(config, 'collection_name', "rag_collection")
         self.collection = self.client.get_or_create_collection(name=self.collection_name)
 
     async def add_documents(self, documents: List[Dict[str, Any]]):
@@ -16,22 +22,44 @@ class ChromaVectorStore(VectorStore):
         metadatas = [doc['metadata'] for doc in documents]
         documents_text = [doc['content'] for doc in documents]
         
-        self.collection.add(
+        await asyncio.to_thread(
+            self.collection.add,
             ids=ids,
             embeddings=embeddings,
             metadatas=metadatas,
             documents=documents_text
         )
-    
+
+    async def upsert_documents(self, documents: List[Dict[str, Any]]):
+        ids = [doc.get('id') or str(uuid.uuid4()) for doc in documents]
+        embeddings = [doc['embedding'] for doc in documents]
+        metadatas = [doc['metadata'] for doc in documents]
+        documents_text = [doc['content'] for doc in documents]
+        
+        await asyncio.to_thread(
+            self.collection.upsert,
+            ids=ids,
+            embeddings=embeddings,
+            metadatas=metadatas,
+            documents=documents_text
+        )
+
     async def file_exists(self, sha256: str, size: int, last_modified: int) -> bool:
         try:
-            res = self.collection.get(where={"fileSHA256": sha256, "fileSize": size, "lastModified": last_modified})
-            return bool(res and res.get('ids'))
+            res = await asyncio.to_thread(
+                self.collection.get,
+                where={'fileSHA256': sha256, 'fileSize': size, 'lastModified': last_modified},
+                limit=1,
+                include=[] # Don't fetch embeddings/docs
+            )
+            ids = res.get('ids') or []
+            return len(ids) > 0
         except Exception:
             return False
 
     async def similarity_search(self, vector: List[float], limit: int = 5, filter: Optional[Dict] = None) -> List[Dict[str, Any]]:
-        results = self.collection.query(
+        results = await asyncio.to_thread(
+            self.collection.query,
             query_embeddings=[vector],
             n_results=limit,
             where=filter
@@ -53,15 +81,16 @@ class ChromaVectorStore(VectorStore):
     async def hybrid_search(self, text: str, vector: List[float], limit: int = 5, filter: Optional[Dict] = None) -> List[Dict[str, Any]]:
         return await self.similarity_search(vector, limit, filter)
 
-    async def list_documents(self, filter: Optional[Dict[str, Any]] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    async def list_documents(self, filter: Optional[Dict[str, Any]] = None, limit: int = 100, cursor: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         kwargs: Dict[str, Any] = {}
         if filter:
             kwargs["where"] = filter
         limit_int = max(1, int(limit))
+        offset = int(cursor) if cursor and cursor.isdigit() else 0
         try:
-            res = self.collection.get(limit=limit_int, **kwargs)
+            res = await asyncio.to_thread(self.collection.get, limit=limit_int, offset=offset, **kwargs)
         except TypeError:
-            res = self.collection.get(**kwargs)
+            res = await asyncio.to_thread(self.collection.get, **kwargs)
         ids = res.get("ids") or []
         documents = res.get("documents") or []
         metadatas = res.get("metadatas") or []
@@ -74,7 +103,9 @@ class ChromaVectorStore(VectorStore):
                     "metadata": metadatas[i] if i < len(metadatas) else {},
                 }
             )
-        return out[:limit_int]
+        
+        next_cursor = str(offset + len(out)) if len(out) == limit_int else None
+        return out, next_cursor
 
     async def delete_documents(self, filter: Dict[str, Any]) -> int:
         deleted = 0
@@ -82,13 +113,13 @@ class ChromaVectorStore(VectorStore):
         batch = 1000
         while True:
             try:
-                res = self.collection.get(where=filter, limit=batch, offset=offset)
+                res = await asyncio.to_thread(self.collection.get, where=filter, limit=batch, offset=offset)
             except TypeError:
-                res = self.collection.get(where=filter)
+                res = await asyncio.to_thread(self.collection.get, where=filter)
             ids = res.get("ids") or []
             if not ids:
                 break
-            self.collection.delete(ids=ids)
+            await asyncio.to_thread(self.collection.delete, ids=ids)
             deleted += len(ids)
             if len(ids) < batch:
                 break
@@ -116,5 +147,5 @@ class ChromaVectorStore(VectorStore):
                 metadatas.append(merged)
             else:
                 metadatas.append(md)
-        self.collection.update(ids=ids, documents=documents, metadatas=metadatas)
+        await asyncio.to_thread(self.collection.update, ids=ids, documents=documents, metadatas=metadatas)
         return len(ids)

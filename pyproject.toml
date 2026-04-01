@@ -27,7 +27,9 @@ dependencies = [
     "prisma",
     "chromadb",
     "requests",
-    "asyncpg"
+    "asyncpg",
+    "aiohttp",
+    "pysbd"
 ]
 
 [project.urls]

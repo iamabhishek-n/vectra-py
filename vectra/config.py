@@ -1,6 +1,6 @@
 from enum import Enum
-from typing import List, Optional, Any, Dict
-from pydantic import BaseModel, Field, field_validator
+from typing import List, Optional, Any, Dict, Union
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 class ProviderType(str, Enum):
     OPENAI = 'openai'
@@ -9,6 +9,12 @@ class ProviderType(str, Enum):
     OPENROUTER = 'openrouter'
     HUGGINGFACE = 'huggingface'
     OLLAMA = 'ollama'
+
+class RerankingProvider(str, Enum):
+    LLM = 'llm'
+    CROSS_ENCODER = 'cross-encoder'
+    COHERE = 'cohere'
+    JINA = 'jina'
 
 class ChunkingStrategy(str, Enum):
     RECURSIVE = 'recursive'
@@ -25,6 +31,10 @@ class SessionType(str, Enum):
     CLI = 'cli'
     API = 'api'
     CHAT = 'chat'
+
+class IngestionConfig(BaseModel):
+    rate_limit_enabled: bool = False
+    concurrency_limit: int = 5
 
 class EmbeddingConfig(BaseModel):
     provider: ProviderType
@@ -56,8 +66,10 @@ class ChunkingConfig(BaseModel):
 
 class RerankingConfig(BaseModel):
     enabled: bool = False
-    provider: str = 'llm'
+    provider: RerankingProvider = RerankingProvider.LLM
     llm_config: Optional[LLMConfig] = None
+    model_name: Optional[str] = None
+    api_key: Optional[str] = None
     top_n: int = 5
     window_size: int = 20
 
@@ -76,10 +88,11 @@ class RetrievalConfig(BaseModel):
         return v
 
 class DatabaseConfig(BaseModel):
+    model_config = ConfigDict(extra='allow')
     type: str # 'prisma', 'chroma', 'custom'
     table_name: Optional[str] = None
     column_map: Optional[Dict[str, str]] = {"content": "content", "vector": "vector", "metadata": "metadata"}
-    client_instance: Any  # Prisma client, Chroma client, etc.
+    client_instance: Optional[Any] = None
 
 class ObservabilityConfig(BaseModel):
     enabled: bool = False
@@ -93,6 +106,13 @@ class ObservabilityConfig(BaseModel):
 class TelemetryConfig(BaseModel):
     enabled: bool = True
 
+class GuardrailConfig(BaseModel):
+    block_pii: bool = False           # Detect and redact PII in outputs
+    block_off_topic: bool = False     # Reject queries unrelated to ingested docs
+    max_query_length: int = 2000
+    content_filter: bool = False      # Block harmful content generation
+    hallucination_check: bool = False # Verify claims against retrieved context
+
 class VectraConfig(BaseModel):
     embedding: EmbeddingConfig
     llm: LLMConfig
@@ -101,8 +121,9 @@ class VectraConfig(BaseModel):
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     reranking: RerankingConfig = Field(default_factory=RerankingConfig)
     callbacks: List[Any] = []
+    middlewares: List[Any] = []
     metadata: Optional[Dict[str, Any]] = None
-    ingestion: Optional[Dict[str, Any]] = Field(default_factory=lambda: { 'rate_limit_enabled': False, 'concurrency_limit': 5 })
+    ingestion: IngestionConfig = Field(default_factory=IngestionConfig)
     memory: Optional[Dict[str, Any]] = Field(default_factory=lambda: { 'enabled': False, 'type': 'in-memory', 'max_messages': 20 })
     query_planning: Optional[Dict[str, Any]] = None
     grounding: Optional[Dict[str, Any]] = None
@@ -111,4 +132,6 @@ class VectraConfig(BaseModel):
     tracing: Optional[Dict[str, Any]] = None
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    guardrails: GuardrailConfig = Field(default_factory=GuardrailConfig)
     session_type: SessionType = SessionType.API
+    max_cache_size: int = 10000

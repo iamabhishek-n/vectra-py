@@ -1,9 +1,13 @@
-from typing import List, Dict, Any, Optional, AsyncGenerator
+from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple
 import re
+import json
+import time
 import hashlib
 import asyncio
 import os
 import uuid
+import time
+from collections import OrderedDict
 from .config import VectraConfig, ProviderType, ChunkingStrategy, RetrievalStrategy
 from .observability import SQLiteLogger
 from .telemetry import telemetry
@@ -18,15 +22,43 @@ from .backends.chroma_store import ChromaVectorStore
 from .backends.qdrant_store import QdrantVectorStore
 from .backends.milvus_store import MilvusVectorStore
 from .backends.huggingface import HuggingFaceBackend
-from .reranker import LLMReranker
+from .reranker import get_reranker
 from .memory import InMemoryHistory, RedisHistory, PostgresHistory
 from .backends.ollama import OllamaBackend
+
+class LRUCache:
+    def __init__(self, maxsize=10000):
+        self._cache = OrderedDict()
+        self._maxsize = maxsize
+    
+    def __getitem__(self, key):
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        raise KeyError(key)
+
+    def __setitem__(self, key, value):
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        self._cache[key] = value
+        if len(self._cache) > self._maxsize:
+            self._cache.popitem(last=False)
+            
+    def __contains__(self, key):
+        return key in self._cache
+        
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
 class VectraClient:
     def __init__(self, config: VectraConfig):
         self.config = config
         self.callbacks = config.callbacks or []
-        self._embedding_cache: Dict[str, List[float]] = {}
+        self.middlewares = config.middlewares or []
+        self._embedding_cache = LRUCache(config.max_cache_size)
         
         # Initialize observability
         self.logger = SQLiteLogger(config.observability)
@@ -86,7 +118,7 @@ class VectraClient:
         self.reranker = None
         if config.reranking and config.reranking.enabled:
             rerank_llm = self._create_llm(config.reranking.llm_config) if config.reranking.llm_config else self.llm
-            self.reranker = LLMReranker(rerank_llm, config.reranking)
+            self.reranker = get_reranker(config.reranking, rerank_llm)
 
     def _create_embedder(self):
         conf = self.config.embedding
@@ -109,6 +141,28 @@ class VectraClient:
             if hasattr(cb, event) and callable(getattr(cb, event)):
                 getattr(cb, event)(*args)
 
+    async def _run_middlewares(self, method_name: str, *args):
+        if not self.middlewares:
+            return args[0] if len(args) == 1 else args
+        
+        current_args = args
+        for mw in self.middlewares:
+            if hasattr(mw, method_name):
+                func = getattr(mw, method_name)
+                # Handle both sync and async middleware methods
+                if asyncio.iscoroutinefunction(func):
+                    res = await func(*current_args)
+                else:
+                    res = func(*current_args)
+                
+                # Update args for next middleware in chain
+                if isinstance(res, tuple):
+                    current_args = res
+                else:
+                    current_args = (res,)
+        
+        return current_args[0] if len(current_args) == 1 else current_args
+
     def _is_temporary_file(self, path: str) -> bool:
         name = os.path.basename(path)
         if name.startswith('~$'): return True
@@ -117,42 +171,41 @@ class VectraClient:
         if name.startswith('.'): return True
         return False
     
-    async def ingest_documents(self, file_path: str, ingestion_mode: str = "append"):
-        if os.path.isdir(file_path):
-            summary = { 'processed': 0, 'succeeded': 0, 'failed': 0, 'errors': [] }
-            for root, _, files in os.walk(file_path):
-                for file in files:
-                    full = os.path.join(root, file)
-                    if self._is_temporary_file(full): 
-                        continue
-                    summary['processed'] += 1
-                    try:
-                        await self.ingest_documents(full, ingestion_mode=ingestion_mode)
-                        summary['succeeded'] += 1
-                    except Exception as e:
-                        summary['failed'] += 1
-                        summary['errors'].append({ 'file': full, 'message': str(e) })
-                        self._trigger('on_error', e)
-            self._trigger('on_ingest_summary', summary)
+    async def ingest_batch(self, file_paths: List[str], ingestion_mode: str = "append"):
+        all_files = []
+        for p in file_paths:
+            if os.path.isdir(p):
+                for root, _, files in os.walk(p):
+                    for f in files:
+                        full = os.path.join(root, f)
+                        if not self._is_temporary_file(full):
+                            all_files.append(full)
+            elif os.path.isfile(p):
+                if not self._is_temporary_file(p):
+                    all_files.append(p)
+
+        if not all_files:
             return
 
-        try:
-            import time
-            t0 = time.time()
-            trace_id = str(uuid.uuid4())
-            root_span_id = str(uuid.uuid4())
-            provider = self.config.embedding.provider
-            model_name = self.config.embedding.model_name
-            
-            self._trigger('on_ingest_start', file_path)
+        mode = str(ingestion_mode or "append").lower()
+        if mode not in ("append", "skip", "replace", "upsert"):
+            mode = "append"
 
-            telemetry.track('ingest_started', {
-                'source_type': 'directory' if os.path.isdir(file_path) else 'file',
-                'file_types': [] if os.path.isdir(file_path) else [os.path.splitext(file_path)[1].replace('.', '')],
-                'chunking_strategy': self.config.chunking.strategy,
-                'metadata_enrichment': bool(getattr(self.config, 'metadata', None) and self.config.metadata.get('enrichment'))
-            })
-            
+        t0 = time.time()
+        self._trigger('on_ingest_start', f"batch of {len(all_files)} files")
+        
+        telemetry.track('ingest_batch_started', {
+            'file_count': len(all_files),
+            'ingestion_mode': mode
+        })
+
+        all_documents = []
+        all_chunks = []
+        all_hashes = []
+        all_metas = []
+        file_info_list = []
+
+        for file_path in all_files:
             abs_path = os.path.abspath(file_path)
             try:
                 size = int(os.path.getsize(file_path))
@@ -160,6 +213,7 @@ class VectraClient:
             except Exception:
                 size = 0
                 mtime = 0
+            
             md5 = hashlib.md5()
             sha = hashlib.sha256()
             with open(file_path, 'rb') as f:
@@ -170,149 +224,144 @@ class VectraClient:
                     sha.update(b)
             file_md5 = md5.hexdigest()
             file_sha256 = sha.hexdigest()
-            validation = { 'absolutePath': abs_path, 'fileMD5': file_md5, 'fileSHA256': file_sha256, 'fileSize': size, 'lastModified': mtime, 'timestamp': int(time.time()*1000) }
-            self._trigger('on_pre_ingestion_validation', validation)
+            
             exists = False
-            if hasattr(self.vector_store, 'file_exists'):
+            if mode == "skip" and hasattr(self.vector_store, 'file_exists'):
                 try:
                     exists = await self.vector_store.file_exists(file_sha256, size, mtime)
                 except Exception:
                     exists = False
-            mode = str(ingestion_mode or "append").lower()
-            if mode not in ("append", "skip", "replace", "upsert"):
-                mode = "append"
-            if exists and mode in ("append", "skip"):
-                self._trigger('on_ingest_skipped', validation)
-                return
+            
+            if exists:
+                continue
+
             raw_text = await self.processor.load_document(file_path)
-            
-            self._trigger('on_chunking_start', self.config.chunking.strategy)
+            raw_text = await self._run_middlewares('on_before_chunk', raw_text, self.config)
             chunks = await self.processor.process(raw_text)
-            
-            self._trigger('on_embedding_start', len(chunks))
             hashes = [hashlib.sha256(c.encode('utf-8')).hexdigest() for c in chunks]
-            uncached = [chunks[i] for i,h in enumerate(hashes) if h not in self._embedding_cache]
-            if len(uncached) > 0:
-                ing = (getattr(self.config, 'ingestion', {}) or {})
-                enabled = bool(ing.get('rate_limit_enabled', False))
-                default_limit = int(ing.get('concurrency_limit', 5))
-                limit = default_limit if enabled else len(uncached)
-                new_embeds: List[List[float]] = []
-                for i in range(0, len(uncached), limit):
-                    batch = uncached[i:i+limit]
-                    attempt = 0
-                    delay = 0.5
-                    while True:
-                        try:
-                            out = await self.embedder.embed_documents(batch)
-                            new_embeds.extend(out)
-                            break
-                        except Exception as e:
-                            attempt += 1
-                            if attempt >= 3:
-                                raise e
-                            await asyncio.sleep(delay)
-                            delay = min(4.0, delay * 2)
-                j = 0
-                for i,h in enumerate(hashes):
-                    if h not in self._embedding_cache:
-                        self._embedding_cache[h] = new_embeds[j]
-                        j += 1
-            embeddings = [self._embedding_cache[h] for h in hashes]
             metas = self.processor.compute_chunk_metadata(file_path, raw_text, chunks)
-            documents = []
-            for i, content in enumerate(chunks):
-                md = metas[i] if i < len(metas) else {}
-                meta = {
-                    'source': file_path,
-                    'absolutePath': abs_path,
-                    'fileMD5': file_md5,
-                    'fileSHA256': file_sha256,
-                    'fileSize': size,
-                    'lastModified': mtime,
-                    'chunk_index': i,
-                    'sha256': hashes[i],
-                    'fileType': md.get('fileType'),
-                    'docTitle': md.get('docTitle'),
-                    'pageFrom': md.get('pageFrom'),
-                    'pageTo': md.get('pageTo'),
-                    'section': md.get('section')
-                }
-                # Filter None values for ChromaDB compatibility
+            
+            file_info = {
+                'path': file_path,
+                'abs_path': abs_path,
+                'md5': file_md5,
+                'sha256': file_sha256,
+                'size': size,
+                'mtime': mtime,
+                'chunk_range': (len(all_chunks), len(all_chunks) + len(chunks))
+            }
+            file_info_list.append(file_info)
+            all_chunks.extend(chunks)
+            all_hashes.extend(hashes)
+            all_metas.extend(metas)
+
+        if not all_chunks:
+            duration_ms = int((time.time() - t0) * 1000)
+            self._trigger('on_ingest_end', "batch", 0, duration_ms)
+            return
+
+        # Batch Embedding
+        unique_hashes = list(set(all_hashes))
+        uncached_hashes = [h for h in unique_hashes if h not in self._embedding_cache]
+        
+        if uncached_hashes:
+            # Map hash to index in all_chunks for value retrieval
+            hash_to_chunk = {}
+            for i, h in enumerate(all_hashes):
+                if h in uncached_hashes:
+                    hash_to_chunk[h] = all_chunks[i]
+            
+            uncached_texts = [hash_to_chunk[h] for h in uncached_hashes]
+            
+            ing = self.config.ingestion
+            enabled = ing.rate_limit_enabled
+            default_limit = ing.concurrency_limit
+            limit = default_limit if enabled else len(uncached_texts)
+            
+            new_embeds = [None] * len(uncached_texts)
+            for i in range(0, len(uncached_texts), limit):
+                batch = uncached_texts[i:i+limit]
+                attempt = 0
+                delay = 0.5
+                while True:
+                    try:
+                        out = await self.embedder.embed_documents(batch)
+                        # Middleware Hook: on_after_embed
+                        batch, out = await self._run_middlewares('on_after_embed', batch, out)
+                        for j, vec in enumerate(out):
+                            new_embeds[i + j] = vec
+                        break
+                    except Exception as e:
+                        attempt += 1
+                        if attempt >= 3: raise e
+                        await asyncio.sleep(delay)
+                        delay = min(4.0, delay * 2)
+            
+            for h, vec in zip(uncached_hashes, new_embeds):
+                self._embedding_cache[h] = vec
+
+        # Prepare final documents
+        documents = []
+        chunk_idx_overall = 0
+        for info in file_info_list:
+            start, end = info['chunk_range']
+            for i in range(start, end):
+                meta = all_metas[i] if i < len(all_metas) else {}
+                meta.update({
+                    'source': info['path'],
+                    'absolutePath': info['abs_path'],
+                    'fileMD5': info['md5'],
+                    'fileSHA256': info['sha256'],
+                    'fileSize': info['size'],
+                    'lastModified': info['mtime'],
+                    'chunk_index': i - start,
+                    'sha256': all_hashes[i]
+                })
+                # Filter None values
                 meta = {k: v for k, v in meta.items() if v is not None}
                 
                 documents.append({
-                    'content': content,
-                    'embedding': embeddings[i],
+                    'content': all_chunks[i],
+                    'embedding': self._embedding_cache[all_hashes[i]],
                     'metadata': meta
                 })
 
-            if getattr(self.config, 'metadata', None) and self.config.metadata.get('enrichment'): 
-                import json
-                enriched = []
-                for c in chunks:
-                    try:
-                        prompt = f"Summarize and extract keywords and questions from the following text. Return STRICT JSON with keys: summary (string), keywords (array of strings), hypothetical_questions (array of strings).\nText:\n{c}"
-                        out = await self.llm.generate(prompt, 'You return valid JSON only.')
-                        clean = str(out).replace('```json','').replace('```','').strip()
-                        p = json.loads(clean)
-                        enriched.append({ 'summary': p.get('summary',''), 'keywords': p.get('keywords', []), 'hypothetical_questions': p.get('hypothetical_questions', []) })
-                    except Exception:
-                        import re
-                        words = re.findall(r"[a-zA-Z0-9]+", c.lower())
-                        freq = {}
-                        for w in words:
-                            if len(w) > 3:
-                                freq[w] = freq.get(w, 0) + 1
-                        top = [w for w,_ in sorted(freq.items(), key=lambda kv: kv[1], reverse=True)[:10]]
-                        enriched.append({ 'summary': c[:300], 'keywords': top, 'hypothetical_questions': [] })
-                for i in range(len(documents)):
-                    documents[i]['metadata']['summary'] = enriched[i]['summary']
-                    documents[i]['metadata']['keywords'] = enriched[i]['keywords']
-                    documents[i]['metadata']['hypothetical_questions'] = enriched[i]['hypothetical_questions']
-                
-            if hasattr(self.vector_store, 'ensure_indexes'):
-                try:
-                    await self.vector_store.ensure_indexes()
-                except Exception:
-                    pass
-            exists_server = False
-            if hasattr(self.vector_store, 'file_exists'):
-                try:
-                    exists_server = await self.vector_store.file_exists(file_sha256, size, mtime)
-                except Exception:
-                    exists_server = False
-            if exists_server and mode in ("append", "skip"):
-                self._trigger('on_ingest_skipped', validation)
-                return
+        # Enrichment
+        if getattr(self.config, 'metadata', None) and self.config.metadata.get('enrichment'):
+            enriched = await self._enrich_chunk_metadata(all_chunks)
+            for i in range(min(len(documents), len(enriched))):
+                documents[i]['metadata'].update(enriched[i])
 
-            if mode == "replace":
-                try:
-                    await self.vector_store.delete_documents({ "absolutePath": abs_path })
-                except Exception:
-                    pass
+        # Store
+        if hasattr(self.vector_store, 'ensure_indexes'):
+            try: await self.vector_store.ensure_indexes()
+            except Exception: pass
 
-            if mode == "upsert":
-                to_add = []
-                for d in documents:
-                    try:
-                        updated = 0
-                        if hasattr(self.vector_store, "update_documents"):
-                            updated = await self.vector_store.update_documents(
-                                { "sha256": d["metadata"].get("sha256") },
-                                { "content": d["content"], "metadata": d["metadata"] },
-                            )
-                        if not updated and hasattr(self.vector_store, "delete_documents"):
-                            await self.vector_store.delete_documents({ "sha256": d["metadata"].get("sha256") })
-                        if not updated:
-                            to_add.append(d)
-                    except Exception:
+        if mode == "replace":
+            abs_paths = list(set(info['abs_path'] for info in file_info_list))
+            for ap in abs_paths:
+                try: await self.vector_store.delete_documents({ "absolutePath": ap })
+                except Exception: pass
+
+        if mode == "upsert":
+            to_add = []
+            for d in documents:
+                try:
+                    updated = 0
+                    if hasattr(self.vector_store, "update_documents"):
+                        updated = await self.vector_store.update_documents(
+                            { "sha256": d["metadata"].get("sha256") },
+                            { "content": d["content"], "metadata": d["metadata"] },
+                        )
+                    if not updated and hasattr(self.vector_store, "delete_documents"):
+                        await self.vector_store.delete_documents({ "sha256": d["metadata"].get("sha256") })
+                    if not updated:
                         to_add.append(d)
-                documents = to_add
-                if not documents:
-                    duration_ms = int((time.time() - t0) * 1000)
-                    self._trigger('on_ingest_end', file_path, 0, duration_ms)
-                    return
+                except Exception:
+                    to_add.append(d)
+            documents = to_add
+
+        if documents:
             attempt = 0
             delay = 0.5
             while True:
@@ -321,56 +370,24 @@ class VectraClient:
                     break
                 except Exception as e:
                     attempt += 1
-                    if attempt >= 3:
-                        raise e
+                    if attempt >= 3: raise e
                     await asyncio.sleep(delay)
                     delay = min(4.0, delay * 2)
-            duration_ms = int((time.time() - t0) * 1000)
-            self._trigger('on_ingest_end', file_path, len(chunks), duration_ms)
-            
-            telemetry.track('ingest_completed', {
-                'chunk_count_bucket': '1-50' if len(chunks) <= 50 else '50-200' if len(chunks) <= 200 else '200+',
-                'duration_ms_bucket': '0-1s' if duration_ms < 1000 else '1-5s' if duration_ms < 5000 else '5s+',
-                'cached_embeddings': False # Track if any were cached? Not easy here without counting.
-            })
 
-            self.logger.log_trace({
-                'trace_id': trace_id,
-                'span_id': root_span_id,
-                'name': 'ingest_documents',
-                'start_time': int(t0 * 1000),
-                'end_time': int(time.time() * 1000),
-                'input': {'file_path': file_path},
-                'output': {'chunks': len(chunks), 'duration_ms': duration_ms},
-                'attributes': {'file_size': size},
-                'provider': provider,
-                'model_name': model_name
-            })
-            self.logger.log_metric({'name': 'ingest_latency', 'value': duration_ms, 'tags': {'type': 'single_file'}})
-            
-        except Exception as e:
-            telemetry.track('error_occurred', {
-                'stage': 'ingestion',
-                'error_type': 'unknown' # Could be more specific based on exception type
-            })
-            self._trigger('on_error', e)
-            if 'trace_id' in locals():
-                 self.logger.log_trace({
-                    'trace_id': trace_id,
-                    'span_id': root_span_id,
-                    'name': 'ingest_documents',
-                    'start_time': int(t0 * 1000),
-                    'end_time': int(time.time() * 1000),
-                    'input': {'file_path': file_path},
-                    'error': {'message': str(e)},
-                    'status': 'error',
-                    'provider': provider,
-                    'model_name': model_name
-                })
-            raise e
+        duration_ms = int((time.time() - t0) * 1000)
+        self._trigger('on_ingest_end', "batch", len(all_chunks), duration_ms)
+        
+        telemetry.track('ingest_batch_completed', {
+            'file_count': len(all_files),
+            'chunk_count': len(all_chunks),
+            'duration_ms': duration_ms
+        })
 
-    async def list_documents(self, filter: Optional[Dict[str, Any]] = None, limit: int = 100) -> List[Dict[str, Any]]:
-        return await self.vector_store.list_documents(filter=filter, limit=limit)
+    async def ingest_documents(self, file_path: str, ingestion_mode: str = "append"):
+        await self.ingest_batch([file_path], ingestion_mode=ingestion_mode)
+
+    async def list_documents(self, filter: Optional[Dict[str, Any]] = None, limit: int = 100, cursor: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        return await self.vector_store.list_documents(filter=filter, limit=limit, cursor=cursor)
 
     async def delete_documents(self, filter: Dict[str, Any]) -> int:
         return await self.vector_store.delete_documents(filter)
@@ -387,6 +404,29 @@ class VectraClient:
         response = await self.retrieval_llm.generate(prompt)
         return [line.strip() for line in response.split('\n') if line.strip()][:3]
 
+    async def _enrich_chunk_metadata(self, chunks: List[str], concurrency: int = 5) -> List[Dict[str, Any]]:
+        sem = asyncio.Semaphore(concurrency)
+        
+        async def _enrich_one(c):
+            async with sem:
+                try:
+                    prompt = f"Summarize and extract keywords and questions from the following text. Return STRICT JSON with keys: summary (string), keywords (array of strings), hypothetical_questions (array of strings).\nText:\n{c}"
+                    out = await self.llm.generate(prompt, 'You return valid JSON only.')
+                    clean = str(out).replace('```json','').replace('```','').strip()
+                    p = json.loads(clean)
+                    return { 'summary': p.get('summary',''), 'keywords': p.get('keywords', []), 'hypothetical_questions': p.get('hypothetical_questions', []) }
+                except Exception:
+                    # Heuristic fallback if LLM fails
+                    words = re.findall(r"[a-zA-Z0-9]+", c.lower())
+                    freq = {}
+                    for w in words:
+                        if len(w) > 3:
+                            freq[w] = freq.get(w, 0) + 1
+                    top = [w for w,_ in sorted(freq.items(), key=lambda kv: kv[1], reverse=True)[:10]]
+                    return { 'summary': c[:300], 'keywords': top, 'hypothetical_questions': [] }
+                    
+        return await asyncio.gather(*[_enrich_one(c) for c in chunks])
+
     async def _generate_hypothetical_questions(self, query: str) -> List[str]:
         out = await self.retrieval_llm.generate(f"Generate 3 hypothetical questions related to the query. Return a VALID JSON array of strings.\nQuery: {query}")
         try:
@@ -397,12 +437,17 @@ class VectraClient:
             return []
 
     def _token_estimate(self, text: str) -> int:
-        return max(1, (len(text or '') + 3) // 4)
+        if not text:
+            return 0
+        ascii_chars = sum(1 for c in text if ord(c) < 128)
+        non_ascii = len(text) - ascii_chars
+        return max(1, (ascii_chars + 3) // 4 + non_ascii)
 
-    def _build_context_parts(self, docs: List[Dict[str, Any]], query: str) -> List[str]:
+    def _build_context_parts(self, docs: List[Dict[str, Any]], query: str) -> Tuple[List[str], List[Dict[str, Any]]]:
         budget = int(self.config.query_planning.get('token_budget', 2048)) if getattr(self.config, 'query_planning', None) else 2048
         prefer_summ = int(self.config.query_planning.get('prefer_summaries_below', 1024)) if getattr(self.config, 'query_planning', None) else 1024
         parts: List[str] = []
+        doc_map: List[Dict[str, Any]] = []
         used = 0
         for d in docs:
             md = d.get('metadata', {})
@@ -417,24 +462,71 @@ class VectraClient:
             if used + est > budget:
                 break
             parts.append(part)
+            doc_map.append({
+                'source': md.get('source') or md.get('absolutePath', ''),
+                'pageFrom': md.get('pageFrom'),
+                'pageTo': md.get('pageTo'),
+                'section': md.get('section'),
+                'docTitle': md.get('docTitle'),
+                '_content': chosen
+            })
             used += est
-        return parts
+        return parts, doc_map
 
-    def _extract_snippets(self, docs: List[Dict[str, Any]], query: str, max_snippets: int) -> List[str]:
-        terms = [t for t in re.findall(r"[a-zA-Z0-9]+", query.lower()) if len(t) > 2]
-        out: List[str] = []
+    def _extract_first_sentence(self, text: str, max_len: int = 250) -> str:
+        if not text:
+            return ''
+        m = re.match(r'^(.*?[.!?])\s', text, re.S)
+        sent = m.group(1) if m else text
+        return sent[:max_len] + '...' if len(sent) > max_len else sent
+
+    def _parse_citations(self, answer: str, doc_map: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        citations: List[Dict[str, Any]] = []
+        seen: set = set()
+        for m in re.finditer(r'\[(\d+)\]', answer):
+            idx = int(m.group(1))
+            if idx in seen or idx < 1 or idx > len(doc_map):
+                continue
+            seen.add(idx)
+            doc = doc_map[idx - 1]
+            citations.append({
+                'index': idx,
+                'source': doc.get('source') or '',
+                'page': doc.get('pageFrom'),
+                'section': doc.get('section'),
+                'quote': self._extract_first_sentence(doc.get('_content') or '', 250)
+            })
+        return citations
+
+    async def _extract_snippets(self, docs: List[Dict[str, Any]], query: str, query_vector: List[float], max_snippets: int) -> List[str]:
+        all_sentences = []
         for d in docs:
+            # Use sentence splitting to extract candidates
             sents = re.split(r"(?<=[.!?])\s+", d.get('content',''))
             for s in sents:
-                l = s.lower()
-                score = sum(1 for t in terms if t in l)
-                if score > 0:
-                    md = d.get('metadata', {})
-                    pf = md.get('pageFrom'); pt = md.get('pageTo')
-                    pages = f"pages {pf}-{pt}" if pf and pt else ''
-                    out.append(f"{md.get('docTitle') or ''} {md.get('section') or ''} {pages}\n{s}")
-                    if len(out) >= max_snippets:
-                        return out
+                all_sentences.append({'doc': d, 'text': s})
+                
+        if not all_sentences: return []
+        
+        # Batch embed sentences for semantic evaluation
+        sentence_texts = [s['text'] for s in all_sentences]
+        sentence_embeddings = await self.embedder.embed_documents(sentence_texts)
+        
+        scored = []
+        for i, emb in enumerate(sentence_embeddings):
+            # Compute cosine similarity with query vector
+            score = sum(a*b for a, b in zip(emb, query_vector))
+            scored.append({'text': all_sentences[i]['text'], 'doc': all_sentences[i]['doc'], 'score': score})
+            
+        scored.sort(key=lambda x: x['score'], reverse=True)
+        
+        out = []
+        for s in scored[:max_snippets]:
+            d = s['doc']
+            md = d.get('metadata', {})
+            pf = md.get('pageFrom'); pt = md.get('pageTo')
+            pages = f"pages {pf}-{pt}" if pf and pt else ''
+            out.append(f"{md.get('docTitle') or ''} {md.get('section') or ''} {pages}\n{s['text']}")
         return out
 
     def _reciprocal_rank_fusion(self, doc_lists: List[List[Dict]], k=60) -> List[Dict]:
@@ -525,7 +617,6 @@ class VectraClient:
              self.logger.update_session(session_id, None, {'last_query': query})
 
         try:
-            import time
             t_start = time.time()
             t_ret = time.time()
             self._trigger('on_retrieval_start', query)
@@ -535,11 +626,15 @@ class VectraClient:
             k = self.config.reranking.window_size if (self.config.reranking and self.config.reranking.enabled) else 5
             
             query_vector = await self.embedder.embed_query(query)
+            # Middleware Hook: on_before_retrieve
+            query, query_vector = await self._run_middlewares('on_before_retrieve', query, query_vector)
 
             if strategy == RetrievalStrategy.HYDE:
                 hypothetical_doc = await self._generate_hyde_query(query)
                 hyde_vector = await self.embedder.embed_query(hypothetical_doc)
-                docs = await self.vector_store.similarity_search(hyde_vector, k, filter)
+                # Weighted average: 70% HyDE, 30% original query
+                combined_vector = [(0.7 * h + 0.3 * q) for h, q in zip(hyde_vector, query_vector)]
+                docs = await self.vector_store.similarity_search(combined_vector, k, filter)
                 
             elif strategy == RetrievalStrategy.MULTI_QUERY:
                 queries = await self._generate_multi_queries(query)
@@ -547,10 +642,15 @@ class VectraClient:
                     hyps = await self._generate_hypothetical_questions(query)
                     queries.extend(hyps)
                 queries.append(query)
-                result_lists = []
-                for q in queries:
-                    vec = await self.embedder.embed_query(q)
-                    result_lists.append(await self.vector_store.similarity_search(vec, k, filter))
+                
+                # Concurrent embedding of all queries
+                embed_tasks = [self.embedder.embed_query(q) for q in queries]
+                vectors = await asyncio.gather(*embed_tasks)
+                
+                # Concurrent similarity search for all generated vectors
+                search_tasks = [self.vector_store.similarity_search(v, k, filter) for v in vectors]
+                result_lists = await asyncio.gather(*search_tasks)
+                
                 docs = self._reciprocal_rank_fusion(result_lists, k=60)
                 
             elif strategy == RetrievalStrategy.HYBRID:
@@ -596,11 +696,18 @@ class VectraClient:
                 dd = dict(d)
                 dd['_boost'] = match
                 boosted.append(dd)
-            boosted.sort(key=lambda x: x.get('_boost',0), reverse=True)
-            context_parts = self._build_context_parts(boosted, query)
+            boosted.sort(key=lambda x: (x.get('score', 0) + 0.1 * x.get('_boost', 0)), reverse=True)
+
+            gen_conf = getattr(self.config, 'generation', None) or {}
+            citations_enabled = gen_conf.get('structured_output') == 'citations' \
+                and not (getattr(self.config, 'grounding', None) and self.config.grounding.get('strict'))
+
+            context_parts, doc_map = self._build_context_parts(boosted, query)
+            if citations_enabled:
+                context_parts = [f"[{i + 1}] {p}" for i, p in enumerate(context_parts)]
             if getattr(self.config, 'grounding', None) and self.config.grounding.get('enabled'):
                 max_snippets = int(self.config.grounding.get('max_snippets', 3))
-                snippets = self._extract_snippets(boosted, query, max_snippets)
+                snippets = await self._extract_snippets(boosted, query, query_vector, max_snippets)
                 if self.config.grounding.get('strict'):
                     context_parts = snippets
                 else:
@@ -622,12 +729,15 @@ class VectraClient:
                     prompt = f"Conversation:\n{history_text}\n\n{prompt}"
             else:
                 conv_section = f"Conversation:\n{history_text}\n\n" if history_text else ""
-                prompt = f"Answer the question using the provided summaries and cite titles/sections/pages where relevant.\nContext:\n{context}\n\n{conv_section}Question: {query}"
+                if citations_enabled:
+                    prompt = f"Answer the question using the provided context. Cite sources using inline markers like [1], [2], etc., matching the numbered context chunks. Every factual claim must have a citation.\nContext:\n{context}\n\n{conv_section}Question: {query}"
+                else:
+                    prompt = f"Answer the question using the provided summaries and cite titles/sections/pages where relevant.\nContext:\n{context}\n\n{conv_section}Question: {query}"
             
             t_gen = time.time()
             self._trigger('on_generation_start', prompt)
             
-            system_inst = "You are a helpful RAG assistant."
+            system_inst = "You are a helpful RAG assistant. When answering, cite sources using inline markers like [1], [2], etc., matching the numbered context chunks provided. Every factual claim must have a citation." if citations_enabled else "You are a helpful RAG assistant."
             if stream:
                 # Streaming Logic
                 self.logger.log_trace({
@@ -642,9 +752,26 @@ class VectraClient:
                     'provider': provider,
                     'model_name': model_name
                 })
-                return self.llm.generate_stream(prompt, system_inst) # Need to implement this in LLMs
+                original_stream = self.llm.generate_stream(prompt, system_inst)
+                _self = self
+                _citations_enabled = citations_enabled
+                _doc_map = doc_map
+
+                async def _wrapped_stream():
+                    full_answer = ''
+                    async for chunk in original_stream:
+                        delta = chunk.get('delta', '') if isinstance(chunk, dict) else (chunk if isinstance(chunk, str) else '')
+                        full_answer += delta
+                        yield chunk
+                    if _citations_enabled:
+                        yield {'type': 'citations', 'citations': _self._parse_citations(full_answer, _doc_map)}
+
+                return _wrapped_stream()
             else:
                 answer = await self.llm.generate(prompt, system_inst)
+                # Middleware Hook: on_after_generate
+                sources = [d['metadata'] for d in docs]
+                answer, sources = await self._run_middlewares('on_after_generate', answer, sources)
                 if self.history and session_id:
                     add_msg = getattr(self.history, 'add_message', None)
                     if callable(add_msg):
@@ -701,13 +828,21 @@ class VectraClient:
                     'result_count': len(docs)
                 })
 
-                if getattr(self.config, 'generation', None) and self.config.generation.get('output_format') == 'json':
+                if gen_conf.get('output_format') == 'json':
                     try:
-                        import json
                         parsed = json.loads(str(answer))
-                        return {'answer': parsed, 'sources': [d['metadata'] for d in docs]}
+                        result = {'answer': parsed, 'sources': [d['metadata'] for d in docs]}
+                        if citations_enabled:
+                            result['citations'] = self._parse_citations(str(answer), doc_map)
+                        return result
                     except Exception:
-                        return {'answer': answer, 'sources': [d['metadata'] for d in docs]}
+                        result = {'answer': answer, 'sources': [d['metadata'] for d in docs]}
+                        if citations_enabled:
+                            result['citations'] = self._parse_citations(str(answer), doc_map)
+                        return result
+                if citations_enabled:
+                    citations = self._parse_citations(str(answer), doc_map)
+                    return {'answer': answer, 'citations': citations, 'sources': [d['metadata'] for d in docs]}
                 return {'answer': answer, 'sources': [d['metadata'] for d in docs]}
             
         except Exception as e:
@@ -735,18 +870,55 @@ class VectraClient:
         })
         report: List[Dict[str, Any]] = []
         for item in test_set:
-            res = await self.query_rag(item['question'])
-            ctx = "\n".join([s.get('summary','') for s in res.get('sources', [])])
-            fp = f"Rate 0-1: Is the following Answer derived only from the Context?\nContext:\n{ctx}\n\nAnswer:\n{res.get('answer') if isinstance(res.get('answer'), str) else str(res.get('answer'))}"
-            rp = f"Rate 0-1: Does the Answer correctly answer the Question?\nQuestion:\n{item['question']}\n\nAnswer:\n{res.get('answer') if isinstance(res.get('answer'), str) else str(res.get('answer'))}"
-            faith = 0.0; rel = 0.0
-            try:
-                faith = max(0.0, min(1.0, float(str(await self.llm.generate(fp, 'You return a single number between 0 and 1.')))))
-            except Exception:
-                faith = 0.0
-            try:
-                rel = max(0.0, min(1.0, float(str(await self.llm.generate(rp, 'You return a single number between 0 and 1.')))))
-            except Exception:
-                rel = 0.0
-            report.append({ 'question': item['question'], 'expectedGroundTruth': item.get('expectedGroundTruth',''), 'faithfulness': faith, 'relevance': rel })
+            query = item['question']
+            ground_truth = item.get('expectedGroundTruth', '')
+            res = await self.query_rag(query)
+            answer = res.get('answer', '')
+            sources = res.get('sources', [])
+            context = "\n".join([f"[Source {i+1}] {s.get('content', s.get('summary', ''))}" for i, s in enumerate(sources)])
+
+            # 1. Faithfulness (Claim-level)
+            faith_prompt = f"""Given the context and the answer, determine if every claim in the answer is supported by the context.
+Context: {context}
+Answer: {answer}
+Return JSON: {{"claims": [{{"claim": "...", "supported": true/false, "evidence": "..."}}], "score": 0.0-1.0}}"""
+            
+            # 2. Context Precision (Chunk relevance)
+            precision_results = []
+            for i, src in enumerate(sources):
+                chunk = src.get('content', src.get('summary', ''))
+                prec_prompt = f"Query: {query}\nChunk: {chunk}\nIs this chunk relevant to the query? Return JSON: {{\"relevant\": true/false}}"
+                try:
+                    p_res = await self.llm.generate(prec_prompt, "Return valid JSON.")
+                    p_json = json.loads(re.search(r'\{.*\}', p_res, re.S).group(0))
+                    precision_results.append(1.0 if p_json.get('relevant') else 0.0)
+                except: precision_results.append(0.0)
+            context_precision = sum(precision_results) / len(precision_results) if precision_results else 0.0
+
+            # 3. Context Recall (GT facts in Context)
+            recall_prompt = f"Ground Truth: {ground_truth}\nContext: {context}\nDoes the context contain the facts needed for the ground truth? Return JSON: {{\"facts\": [{{\"fact\": \"...\", \"present\": true/false}}], \"score\": 0.0-1.0}}"
+            
+            # 4. Answer Correctness (LLM-as-judge)
+            correctness_prompt = f"Question: {query}\nGenerated Answer: {answer}\nGround Truth: {ground_truth}\nRate correctness (0-1). Return JSON: {{\"score\": 0.0-1.0, \"reason\": \"...\"}}"
+
+            metrics = {'faithfulness': 0.0, 'context_recall': 0.0, 'answer_correctness': 0.0}
+            for key, prompt in [('faithfulness', faith_prompt), ('context_recall', recall_prompt), ('answer_correctness', correctness_prompt)]:
+                try:
+                    m_res = await self.llm.generate(prompt, "Return valid JSON.")
+                    m_json = json.loads(re.search(r'\{.*\}', m_res, re.S).group(0))
+                    metrics[key] = m_json.get('score', 0.0)
+                except: pass
+
+            report.append({
+                'question': query,
+                'expectedGroundTruth': ground_truth,
+                'answer': answer,
+                'metrics': {
+                    'faithfulness': metrics['faithfulness'],
+                    'relevance': metrics['answer_correctness'], # Map to existing field for compat
+                    'context_precision': context_precision,
+                    'context_recall': metrics['context_recall'],
+                    'answer_correctness': metrics['answer_correctness']
+                }
+            })
         return report

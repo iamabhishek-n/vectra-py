@@ -1,5 +1,11 @@
 from typing import List, Dict, Any, Optional
 import json
+import re
+
+def _safe_ident(name: str) -> str:
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+        raise ValueError(f"Invalid SQL identifier: {name}")
+    return name
 
 class InMemoryHistory:
     def __init__(self, max_messages: int = 20):
@@ -59,9 +65,18 @@ class RedisHistory:
 class PostgresHistory:
     def __init__(self, client: Any, table_name: str = 'ChatMessage', column_map: Optional[Dict[str, str]] = None, max_messages: int = 20):
         self.client = client
-        self.table_name = table_name
-        self.column_map = column_map or { 'sessionId': 'sessionId', 'role': 'role', 'content': 'content', 'createdAt': 'createdAt' }
+        self.table_name = _safe_ident(table_name)
+        _cmap = column_map or { 'sessionId': 'sessionId', 'role': 'role', 'content': 'content', 'createdAt': 'createdAt' }
+        self.column_map = {k: _safe_ident(v) for k, v in _cmap.items()}
         self.max_messages = max_messages
+        
+    def _get_connection(self):
+        if hasattr(self.client, 'acquire'): return self.client.acquire()
+        class Dummy:
+            def __init__(self, c): self.c = c
+            async def __aenter__(self): return self.c
+            async def __aexit__(self, *a): pass
+        return Dummy(self.client)
     async def add_message(self, session_id: str, role: str, content: str):
         if not session_id or not self.client:
             return
@@ -69,8 +84,11 @@ class PostgresHistory:
         c = self.column_map
         q = f'INSERT INTO "{t}" ("{c["sessionId"]}","{c["role"]}","{c["content"]}","{c["createdAt"]}") VALUES ($1,$2,$3,NOW())'
         try:
-            if hasattr(self.client, 'execute_raw'):
-                await self.client.execute_raw(q, session_id, role, content)
+            async with self._get_connection() as conn:
+                if hasattr(conn, 'execute_raw'):
+                    await conn.execute_raw(q, session_id, role, content)
+                elif hasattr(conn, 'execute'):
+                     await conn.execute(q, session_id, role, content)
         except Exception:
             pass
     async def get_recent(self, session_id: str, n: int = 10) -> List[Dict[str, Any]]:
@@ -81,8 +99,11 @@ class PostgresHistory:
         q = f'SELECT "{c["role"]}" as role, "{c["content"]}" as content FROM "{t}" WHERE "{c["sessionId"]}" = $1 ORDER BY "{c["createdAt"]}" DESC LIMIT {max(1,n)}'
         try:
             rows = []
-            if hasattr(self.client, 'query_raw'):
-                rows = await self.client.query_raw(q, session_id)
+            async with self._get_connection() as conn:
+                if hasattr(conn, 'query_raw'):
+                    rows = await conn.query_raw(q, session_id)
+                elif hasattr(conn, 'fetch'):
+                    rows = await conn.fetch(q, session_id)
             if isinstance(rows, list):
                 rows.reverse()
                 return [{ 'role': r.get('role'), 'content': r.get('content') } for r in rows]

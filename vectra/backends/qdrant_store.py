@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from ..interfaces import VectorStore
 
 class QdrantVectorStore(VectorStore):
@@ -14,6 +14,9 @@ class QdrantVectorStore(VectorStore):
             'payload': {'content': doc['content'], 'metadata': doc['metadata']}
         } for i, doc in enumerate(documents)]
         await self.client.upsert(self.collection, points=points)
+
+    async def upsert_documents(self, documents: List[Dict[str, Any]]):
+        return await self.add_documents(documents)
 
     def _normalize_filter(self, filter: Optional[Dict[str, Any]]):
         if not filter:
@@ -35,6 +38,35 @@ class QdrantVectorStore(VectorStore):
 
     async def hybrid_search(self, text: str, vector: List[float], limit: int = 5, filter: Optional[Dict] = None) -> List[Dict[str, Any]]:
         return await self.similarity_search(vector, limit, filter)
+
+    async def file_exists(self, sha256: str, size: int, last_modified: int) -> bool:
+        q_filter = self._normalize_filter({'fileSHA256': sha256, 'fileSize': size, 'lastModified': last_modified})
+        try:
+            res = await self.client.scroll(
+                self.collection,
+                scroll_filter=q_filter,
+                limit=1,
+                with_payload=False,
+                with_vectors=False
+            )
+            points = res[0] # res is (points, next_page_offset)
+            return len(points) > 0
+        except TypeError:
+             # Older client
+            try:
+                res = await self.client.scroll(
+                    self.collection,
+                    filter=q_filter,
+                    limit=1,
+                    with_payload=False,
+                    with_vectors=False
+                )
+                points = res[0]
+                return len(points) > 0
+            except Exception:
+                return False
+        except Exception:
+            return False
 
     async def _scroll_points(self, filter: Optional[Dict[str, Any]], limit: int, offset=None):
         if hasattr(self.client, "scroll"):
@@ -59,33 +91,26 @@ class QdrantVectorStore(VectorStore):
                 )
         raise NotImplementedError("Qdrant client does not support scroll()")
 
-    async def list_documents(self, filter: Optional[Dict[str, Any]] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    async def list_documents(self, filter: Optional[Dict[str, Any]] = None, limit: int = 100, cursor: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         limit_int = max(1, int(limit))
-        batch = min(256, limit_int)
+        res = await self._scroll_points(filter, limit_int, offset=cursor)
+        if isinstance(res, tuple) and len(res) == 2:
+            points, next_cursor = res
+        else:
+            points = res
+            next_cursor = None
+        
         out: List[Dict[str, Any]] = []
-        offset = None
-        while len(out) < limit_int:
-            res = await self._scroll_points(filter, batch, offset=offset)
-            if isinstance(res, tuple) and len(res) == 2:
-                points, new_offset = res
-            else:
-                points = res
-                new_offset = None
-            for p in points or []:
-                payload = p.get("payload") or {}
-                out.append(
-                    {
-                        "id": p.get("id"),
-                        "content": payload.get("content", ""),
-                        "metadata": payload.get("metadata") or {},
-                    }
-                )
-                if len(out) >= limit_int:
-                    break
-            if not points or new_offset is None or new_offset == offset:
-                break
-            offset = new_offset
-        return out
+        for p in points or []:
+            payload = p.get("payload") or {}
+            out.append(
+                {
+                    "id": p.get("id"),
+                    "content": payload.get("content", ""),
+                    "metadata": payload.get("metadata") or {},
+                }
+            )
+        return out, next_cursor
 
     async def delete_documents(self, filter: Dict[str, Any]) -> int:
         deleted = 0

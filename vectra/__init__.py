@@ -1,4 +1,5 @@
 from .core import VectraClient
+from .interfaces import VectraMiddleware
 from .config import (
     VectraConfig,
     EmbeddingConfig,
@@ -14,6 +15,7 @@ from .config import (
 
 __all__ = [
     'VectraClient',
+    'VectraMiddleware',
     'VectraConfig',
     'EmbeddingConfig',
     'LLMConfig',

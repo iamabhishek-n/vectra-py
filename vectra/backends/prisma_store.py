@@ -1,6 +1,6 @@
 import json
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from ..interfaces import VectorStore
 from ..config import DatabaseConfig
 
@@ -20,8 +20,52 @@ class PrismaVectorStore(VectorStore):
         table = self._safe_ident(self.config.table_name or "Document")
         c_vec = self._safe_ident(self.config.column_map.get('vector', 'embedding'))
         c_content = self._safe_ident(self.config.column_map.get('content', 'content'))
+        c_meta = self._safe_ident(self.config.column_map.get('metadata', 'metadata'))
+        
         try:
+            # 1. Extensions
             await client.execute_raw("CREATE EXTENSION IF NOT EXISTS vector")
+
+            # 2. Schema Check & Migration
+            try:
+                rows = await client.query_raw("""
+                    SELECT column_name, data_type, udt_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = $1
+                """, table)
+                existing_cols = {r['column_name']: r for r in rows}
+
+                # Check vector type mismatch
+                if c_vec in existing_cols:
+                    col_info = existing_cols[c_vec]
+                    is_vector = col_info['udt_name'] == 'vector'
+                    is_array = 'array' in (col_info['data_type'] or '').lower()
+                    if is_array and not is_vector:
+                        # We can't easily raise here without breaking flow, but let's log or raise
+                        # The JS implementation raises.
+                        raise ValueError(f"Prisma schema mismatch: '{c_vec}' is array, expected vector.")
+
+                # Auto-add missing columns (raw SQL because Prisma schema might not match DB state yet)
+                alter_stmts = []
+                if c_content not in existing_cols:
+                    alter_stmts.append(f'ADD COLUMN "{c_content}" TEXT')
+                if c_meta not in existing_cols:
+                    alter_stmts.append(f'ADD COLUMN "{c_meta}" JSONB')
+                if c_vec not in existing_cols:
+                    # Defaulting to 1536 if creating from scratch via raw SQL
+                    alter_stmts.append(f'ADD COLUMN "{c_vec}" vector(1536)')
+                if "createdAt" not in existing_cols:
+                    alter_stmts.append('ADD COLUMN "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()')
+                
+                if alter_stmts:
+                    await client.execute_raw(f'ALTER TABLE "{table}" {", ".join(alter_stmts)}')
+
+            except Exception as e:
+                if "schema mismatch" in str(e): raise e
+                # Ignore schema check errors
+                pass
+
+            # 3. Indexes
             await client.execute_raw(f"""
                 CREATE INDEX IF NOT EXISTS "{table}_embedding_ivfflat"
                 ON "{table}" USING ivfflat ("{c_vec}" vector_cosine_ops)
@@ -52,15 +96,42 @@ class PrismaVectorStore(VectorStore):
             query = f"""
             INSERT INTO "{table}" ("id", "{col_content}", "{col_meta}", "{col_vec}", "createdAt")
             VALUES ($1::uuid, $2, $3::jsonb, $4::vector, NOW())
+            ON CONFLICT ("id") DO NOTHING
             """
             await client.execute_raw(
                 query,
-                str(uuid.uuid4()),
+                doc.get('id') or str(uuid.uuid4()),
                 doc['content'],
                 json.dumps(doc['metadata']),
                 vec_str
             )
-    
+
+    async def upsert_documents(self, documents: List[Dict[str, Any]]):
+        client = self.config.client_instance
+        table = self._safe_ident(self.config.table_name or "Document")
+        col_content = self._safe_ident(self.config.column_map.get('content', 'content'))
+        col_meta = self._safe_ident(self.config.column_map.get('metadata', 'metadata'))
+        col_vec = self._safe_ident(self.config.column_map.get('vector', 'embedding'))
+
+        for doc in documents:
+            vec_str = json.dumps(self.normalize_vector(doc['embedding']))
+            query = f"""
+            INSERT INTO "{table}" ("id", "{col_content}", "{col_meta}", "{col_vec}", "createdAt")
+            VALUES ($1::uuid, $2, $3::jsonb, $4::vector, NOW())
+            ON CONFLICT ("id") DO UPDATE SET
+                "{col_content}" = EXCLUDED."{col_content}",
+                "{col_meta}" = EXCLUDED."{col_meta}",
+                "{col_vec}" = EXCLUDED."{col_vec}",
+                "createdAt" = NOW()
+            """
+            await client.execute_raw(
+                query,
+                doc.get('id') or str(uuid.uuid4()),
+                doc['content'],
+                json.dumps(doc['metadata']),
+                vec_str
+            )
+
     async def file_exists(self, sha256: str, size: int, last_modified: int) -> bool:
         client = self.config.client_instance
         table = self._safe_ident(self.config.table_name or "Document")
@@ -137,39 +208,38 @@ class PrismaVectorStore(VectorStore):
         add(lexical, 1.0)
         return sorted(combined.values(), key=lambda d: d['score'], reverse=True)[:limit]
 
-    async def list_documents(self, filter: Optional[Dict[str, Any]] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    async def list_documents(self, filter: Optional[Dict[str, Any]] = None, limit: int = 100, cursor: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         client = self.config.client_instance
         table = self._safe_ident(self.config.table_name or "Document")
         c_content = self._safe_ident(self.config.column_map.get("content", "content"))
         c_metadata = self._safe_ident(self.config.column_map.get("metadata", "metadata"))
         limit_int = max(1, int(limit))
-        where = ""
-        params: List[Any] = []
+        
+        where_parts = []
+        params = []
         if filter:
-            where = f'WHERE "{c_metadata}" @> $1::jsonb'
+            where_parts.append(f'"{c_metadata}" @> ${len(params)+1}::jsonb')
             params.append(json.dumps(filter))
-        q = f"""
-        SELECT "id" as id, "{c_content}" as content, "{c_metadata}" as metadata
-        FROM "{table}"
-        {where}
-        ORDER BY "createdAt" DESC
-        LIMIT {limit_int}
-        """
-        if params:
-            rows = await client.query_raw(q, params[0])
-        else:
-            rows = await client.query_raw(q)
+        if cursor:
+            where_parts.append(f'"id" > ${len(params)+1}')
+            params.append(cursor)
+            
+        where_clause = "WHERE " + " AND ".join(where_parts) if where_parts else ""
+        q = f'SELECT "id" as id, "{c_content}" as content, "{c_metadata}" as metadata FROM "{table}" {where_clause} ORDER BY "id" ASC LIMIT ${len(params)+1}'
+        params.append(limit_int)
+        
+        rows = await client.query_raw(q, *params)
         out: List[Dict[str, Any]] = []
         for r in rows:
             md = r.get("metadata")
-            out.append(
-                {
-                    "id": r.get("id"),
-                    "content": r.get("content"),
-                    "metadata": md if isinstance(md, dict) else json.loads(md) if isinstance(md, str) else md,
-                }
-            )
-        return out
+            out.append({
+                "id": str(r.get("id")),
+                "content": r.get("content"),
+                "metadata": md if isinstance(md, dict) else json.loads(md) if isinstance(md, str) else md,
+            })
+            
+        next_cursor = out[-1]['id'] if len(out) == limit_int else None
+        return out, next_cursor
 
     async def delete_documents(self, filter: Dict[str, Any]) -> int:
         client = self.config.client_instance
