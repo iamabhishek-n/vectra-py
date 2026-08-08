@@ -36,7 +36,7 @@ class MilvusVectorStore(VectorStore):
         else:
             res = await self.client.search(collection_name=self.collection, data=[vector], limit=limit)
         hits = res.get('results', []) if isinstance(res, dict) else res
-        return [{ 'content': h.get('content', ''), 'metadata': h.get('metadata', {}), 'score': 1.0 - h.get('distance', 0.0) } for h in hits]
+        return [{ 'content': h.get('content', ''), 'metadata': h.get('metadata', {}), 'score': h.get('distance', 0.0) } for h in hits]
 
     def _lexical_overlap(self, query: str, content: str) -> float:
         def tokenize(s):
