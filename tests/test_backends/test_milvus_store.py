@@ -62,3 +62,24 @@ class TestMilvusVectorStore:
         updated = await store.update_documents({"category": "docs"}, {"metadata": {"b": 2}})
 
         assert updated == 0
+
+    async def test_update_documents_skips_docs_with_missing_vector(self):
+        """If the Milvus client's query() doesn't return a vector for a fetched
+        document, update_documents must skip it rather than upsert a null embedding
+        over a working one."""
+        client = AsyncMock()
+        client.query = AsyncMock(return_value=[
+            {"id": 1, "vector": None, "content": "no vector doc", "metadata": {"a": 1}},
+            {"id": 2, "vector": [0.3, 0.4], "content": "good doc", "metadata": {"a": 2}},
+        ])
+        client.upsert = AsyncMock()
+        store = MilvusVectorStore(make_config(client))
+
+        updated = await store.update_documents({"category": "docs"}, {"metadata": {"b": 2}})
+
+        assert updated == 1
+        client.upsert.assert_called_once()
+        fields = client.upsert.call_args.kwargs["fields_data"]
+        assert len(fields) == 1
+        assert fields[0]["id"] == 2
+        assert all(f["vector"] is not None for f in fields)

@@ -120,15 +120,22 @@ class MilvusVectorStore(VectorStore):
         update_meta = update_data.get("metadata")
         data = []
         for d in docs:
+            vector = d.get("vector")
+            if vector is None:
+                # Skip documents missing their vector rather than upserting a
+                # null embedding over a working one.
+                continue
             metadata = d.get("metadata") or {}
             if isinstance(update_meta, dict):
                 metadata = {**metadata, **update_meta}
             data.append({
                 "id": d.get("id"),
-                "vector": d.get("vector"),
+                "vector": vector,
                 "content": new_content if isinstance(new_content, str) else d.get("content", ""),
                 "metadata": metadata,
             })
+        if not data:
+            return 0
         if hasattr(self.client, "upsert"):
             await self.client.upsert(collection_name=self.collection, fields_data=data)
         else:
