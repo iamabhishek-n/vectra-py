@@ -3,3 +3,4 @@ __pycache__/
 build
 dist
 .git_disabled
+.worktrees/
