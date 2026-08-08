@@ -1,5 +1,6 @@
 import uuid
 import asyncio
+import re
 from typing import List, Dict, Any, Optional, Tuple
 from ..interfaces import VectorStore
 from ..config import DatabaseConfig
@@ -78,8 +79,34 @@ class ChromaVectorStore(VectorStore):
             })
         return out
 
+    def _lexical_overlap(self, query: str, content: str) -> float:
+        def tokenize(s):
+            return set(t for t in re.findall(r"[a-zA-Z0-9]+", (s or "").lower()) if len(t) > 2)
+        query_tokens = tokenize(query)
+        if not query_tokens:
+            return 0.0
+        content_tokens = tokenize(content)
+        matches = len(query_tokens & content_tokens)
+        return matches / len(query_tokens)
+
     async def hybrid_search(self, text: str, vector: List[float], limit: int = 5, filter: Optional[Dict] = None) -> List[Dict[str, Any]]:
-        return await self.similarity_search(vector, limit, filter)
+        pool = await self.similarity_search(vector, max(limit * 4, 20), filter)
+        if not pool:
+            return []
+        with_lexical = [{**d, "_lexical": self._lexical_overlap(text, d["content"])} for d in pool]
+        semantic_ranked = sorted(with_lexical, key=lambda d: d["score"], reverse=True)
+        lexical_ranked = sorted(with_lexical, key=lambda d: d["_lexical"], reverse=True)
+        rrf_scores: Dict[str, float] = {}
+        for ranked in (semantic_ranked, lexical_ranked):
+            for idx, d in enumerate(ranked):
+                key = d["content"]
+                rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (60 + idx + 1)
+        seen: Dict[str, Dict[str, Any]] = {}
+        for d in with_lexical:
+            if d["content"] not in seen:
+                seen[d["content"]] = d
+        ordered = sorted(seen.values(), key=lambda d: rrf_scores.get(d["content"], 0.0), reverse=True)
+        return [{k: v for k, v in d.items() if k != "_lexical"} for d in ordered[:limit]]
 
     async def list_documents(self, filter: Optional[Dict[str, Any]] = None, limit: int = 100, cursor: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         kwargs: Dict[str, Any] = {}
