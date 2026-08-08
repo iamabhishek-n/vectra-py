@@ -741,7 +741,22 @@ class VectraClient:
                 dd = dict(d)
                 dd['_boost'] = match
                 boosted.append(dd)
-            boosted.sort(key=lambda x: (x.get('score', 0) + 0.1 * x.get('_boost', 0)), reverse=True)
+            # Keyword-boost re-sort: only safe to apply to the plain vector-similarity
+            # retrieval path. Reranking (Cohere/Jina/LLM), HYBRID search (RRF fusion),
+            # MULTI_QUERY (also RRF fusion via _reciprocal_rank_fusion, which returns
+            # original doc dicts with their raw pre-fusion `score` still attached),
+            # and MMR (greedy diversity selection) already produce an authoritative
+            # final order -- re-sorting by raw `score` here would silently discard
+            # that order, and for stores like Milvus (where raw score can be an
+            # unnormalized, metric-dependent distance) could actively invert it.
+            reranking_applied = bool(self.config.reranking and self.config.reranking.enabled and self.reranker)
+            order_is_authoritative = reranking_applied or strategy in (
+                RetrievalStrategy.HYBRID,
+                RetrievalStrategy.MULTI_QUERY,
+                RetrievalStrategy.MMR,
+            )
+            if not order_is_authoritative:
+                boosted.sort(key=lambda x: (x.get('score', 0) + 0.1 * x.get('_boost', 0)), reverse=True)
 
             gen_conf = getattr(self.config, 'generation', None) or {}
             citations_enabled = gen_conf.get('structured_output') == 'citations' \

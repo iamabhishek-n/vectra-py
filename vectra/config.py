@@ -94,6 +94,12 @@ class DatabaseConfig(BaseModel):
     table_name: Optional[str] = None
     column_map: Optional[Dict[str, str]] = {"content": "content", "vector": "vector", "metadata": "metadata"}
     client_instance: Optional[Any] = None
+    # Milvus-specific: the collection's configured distance metric ('COSINE',
+    # 'IP', or 'L2'), used by MilvusVectorStore to normalize raw distance/score
+    # values into a consistent higher-is-better score. Declared explicitly
+    # (rather than relying solely on `extra='allow'`) so the field is
+    # documented and validated like any other backend option.
+    metric_type: Optional[str] = None
 
 class ObservabilityConfig(BaseModel):
     enabled: bool = False

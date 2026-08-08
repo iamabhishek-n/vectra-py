@@ -13,6 +13,11 @@ class MilvusVectorStore(VectorStore):
         self.config = config
         self.client = config.client_instance
         self.collection = config.table_name or 'rag_collection'
+        # Score interpretation is metric-dependent and can't be inferred from a
+        # search-hit object alone, so it must be told explicitly. Default to
+        # 'COSINE' (Milvus's own common default) which preserves the old
+        # passthrough behavior for the common case.
+        self.metric_type = (getattr(self.config, 'metric_type', None) or 'COSINE').upper()
 
     async def add_documents(self, documents: List[Dict[str, Any]]):
         data = [{ 'vector': d['embedding'], 'content': d['content'], 'metadata': d['metadata'] } for d in documents]
@@ -36,7 +41,34 @@ class MilvusVectorStore(VectorStore):
         else:
             res = await self.client.search(collection_name=self.collection, data=[vector], limit=limit)
         hits = res.get('results', []) if isinstance(res, dict) else res
-        return [{ 'content': h.get('content', ''), 'metadata': h.get('metadata', {}), 'score': h.get('distance', 0.0) } for h in hits]
+        return [{ 'content': h.get('content', ''), 'metadata': h.get('metadata', {}), 'score': self._normalize_score(h.get('distance', 0.0)) } for h in hits]
+
+    # The real Milvus SDK's search() result carries a raw distance/score whose
+    # direction depends on the collection's configured metric: higher-is-better
+    # for COSINE/IP, lower-is-better for L2. This can't be recovered from the
+    # search-hit object alone, so it's read from the explicit `metric_type`
+    # config option (default 'COSINE') instead of being guessed from the
+    # value's magnitude -- a magnitude-based heuristic would misclassify real
+    # L2 distances under 1.0 and break negative COSINE scores.
+    #
+    # COSINE and IP are already higher-is-better in Milvus's convention, so
+    # they pass through unchanged (this also preserves the old,
+    # pre-normalization passthrough behavior, and correctly handles COSINE's
+    # real [-1, 1] range, including negative/dissimilar scores). L2 distance
+    # is always >= 0 and lower-is-better, so it's inverted via a monotonic
+    # 1 / (1 + score) transform with no boundary or negative-value issues.
+    #
+    # Normalizing at this single source point lets the rest of the codebase
+    # (hybrid_search, core.py) assume standard "higher score = better match"
+    # semantics, same as every other supported vector store.
+    def _normalize_score(self, raw: Any) -> float:
+        try:
+            n = float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+        if self.metric_type == 'L2':
+            return 1.0 / (1.0 + n)
+        return n
 
     def _lexical_overlap(self, query: str, content: str) -> float:
         def tokenize(s):
