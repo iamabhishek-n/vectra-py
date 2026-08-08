@@ -1,6 +1,8 @@
-.vevn/
+.venv/
 __pycache__/
 build
 dist
 .git_disabled
 .worktrees/
+*.egg-info/
+.pytest_cache/
