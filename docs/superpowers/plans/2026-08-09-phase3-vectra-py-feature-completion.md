@@ -1106,6 +1106,56 @@ git commit -m "feat: replace character-count token heuristic with real tiktoken 
 
 ---
 
+### Task 9: Preempt two known bugs found during vectra-js's Phase 3 final review
+
+This task was added after Tasks 1-8 were planned, based on real bugs found (and fixed, across 3 review rounds) in the sibling vectra-js Phase 3 branch. Both bugs are structurally present in vectra-py's current code too — fixing them now avoids repeating the same review/fix cycle.
+
+**Files:**
+- Modify: `vectra/backends/milvus_store.py`
+- Modify: `vectra/core.py`
+- Create: `tests/test_backends/test_milvus_score_normalization.py`
+- Modify: `tests/test_backends/test_milvus_hybrid.py` (if needed, to keep it passing under the new descending-sort-after-normalization behavior)
+- Modify: `tests/test_retrieval_mmr_embedding_space.py` / create `tests/test_query_rag_ordering.py` (order-preservation regression tests)
+
+**Bug A — Milvus score field is a raw, unnormalized, metric-dependent distance, not a consistent higher-is-better score.**
+
+`vectra/backends/milvus_store.py`'s `similarity_search` currently does `'score': h.get('distance', 0.0)` with no normalization — this is Milvus's raw metric output, which for L2 distance is lower-is-better and for COSINE/IP is higher-is-better (COSINE range is `[-1, 1]`). Task 5's `hybrid_search` sorts `semantic_ranked` descending assuming higher-is-better, which is only correct for COSINE/IP, not L2.
+
+Fix (mirrors the vectra-js fix): add an optional `metric_type` config attribute to `MilvusVectorStore` (read via `getattr(self.config, 'metric_type', None) or 'COSINE'`, uppercased), and normalize in `similarity_search`:
+- `'COSINE'` or `'IP'`: pass the raw score through unchanged (already higher-is-better in Milvus's convention).
+- `'L2'`: invert via `1.0 / (1.0 + score)` (L2 distance is always >= 0, so this is monotonic with no boundary/negative-value issues).
+
+Do NOT use a heuristic based on the score's numeric value (e.g. "if score <= 1, assume already normalized") — that approach is unsound (misclassifies real L2 distances under 1.0, and breaks negative COSINE scores). Use the explicit `metric_type` config attribute only.
+
+Also thread `metric_type` through wherever `vectra-py`'s config schema validates/constructs backend config objects (check `vectra/config.py` for how `database`/vector-store config is defined — e.g. a Pydantic model — and add `metric_type: Optional[str] = None` there if the schema would otherwise silently drop an unrecognized field, exactly as Pydantic/dataclass validation would). Confirm the value actually survives from a user-facing `VectraClient(config=...)` call through to `MilvusVectorStore`'s constructor — write a test that goes through the public config path (not by constructing `MilvusVectorStore` directly), proving `metric_type='L2'` set in the top-level config actually changes normalization behavior.
+
+Test cases required in `tests/test_backends/test_milvus_score_normalization.py`:
+- COSINE (default): a negative score (e.g. `-0.5`) stays `-0.5`, not inverted to a large positive number.
+- L2: a distance of `0` (perfect match) normalizes to the best possible score (`1.0`), and a distance of `2.0` normalizes lower than a distance of `0.5` (monotonic, no boundary discontinuity around `1.0`).
+- End-to-end: `metric_type='L2'` set via the public `VectraClient` config path is honored by the constructed `MilvusVectorStore`.
+
+**Bug B — `query_rag`'s keyword-boost re-sort (`vectra/core.py` around line 701-709) silently discards the ordering that reranking, hybrid search, MULTI_QUERY (RRF fusion), and MMR (diversity selection) already established.**
+
+The `boosted.sort(key=lambda x: (x.get('score', 0) + 0.1 * x.get('_boost', 0)), reverse=True)` line always re-sorts by raw vector `score`. This is correct ONLY for the plain NAIVE/HYDE retrieval path (where `score` is a meaningful ranking signal and no other ordering has been established). It is WRONG whenever:
+- Reranking ran (`self.config.reranking.enabled and self.reranker` — the reranker's returned order is authoritative, e.g. real Cohere/Jina relevance ranking from Tasks 1-2).
+- `strategy == RetrievalStrategy.HYBRID` (the hybrid store's RRF-fused order from Tasks 3-5 is authoritative).
+- `strategy == RetrievalStrategy.MULTI_QUERY` (the `_reciprocal_rank_fusion` order is authoritative — note this fusion returns original doc dicts with their raw, pre-fusion `score` still attached, so the boost re-sort silently undoes the fusion exactly like the hybrid case).
+- `strategy == RetrievalStrategy.MMR` (the `_mmr_select` greedy diversity order from Task 7 is authoritative).
+
+Fix: compute whether the incoming `docs` order is already meaningful (reranking applied OR strategy is HYBRID/MULTI_QUERY/MMR), and skip the boost re-sort in that case — return `docs` (with the `_boost` field still computed/attached the same way, since downstream code may read it, but without reordering). Only apply the `sort(...)` call on the plain NAIVE/HYDE path where no other explicit ordering was established. Reuse the existing `strategy` variable and the existing reranking-enabled check already present in this function — don't introduce a second, differently-computed condition.
+
+Add regression tests proving: (a) when reranking is enabled, the final document order in the response matches the reranker's returned order, not raw-score order (use a discriminating fixture — the reranker-preferred doc must have a LOWER raw score than another doc, so a leftover re-sort would visibly reorder it); (b) same for MULTI_QUERY (RRF-first doc has a lower raw score); (c) same for MMR (a diversity-preferred lower-score doc must rank ahead of a near-duplicate higher-score doc). Do not use fixtures where the fixed and buggy code would coincidentally produce the same order — verify each fixture is actually discriminating by reasoning through what the OLD (buggy, always-re-sort) code would produce vs. the NEW (fixed) code, and confirm they differ, before finalizing the test.
+
+- [ ] Write failing tests for both bugs first (TDD), confirm they fail against the current code.
+- [ ] Implement Bug A's fix in `milvus_store.py` (and config schema if needed).
+- [ ] Implement Bug B's fix in `core.py`.
+- [ ] Run the new tests, confirm they pass.
+- [ ] Run `pytest tests/test_backends/test_milvus_hybrid.py tests/test_retrieval_mmr_embedding_space.py -v` to confirm Tasks 5 and 7's existing tests still pass unchanged.
+- [ ] Run the full suite (`pytest`), confirm everything passes.
+- [ ] Commit: `git add vectra/backends/milvus_store.py vectra/core.py vectra/config.py tests/ && git commit -m "fix: normalize Milvus scores by metric type and preserve reranker/hybrid/multi-query/MMR ordering through query_rag"`
+
+---
+
 ## Self-Review Notes
 
 - **Spec coverage:** real Cohere/Jina rerankers (Tasks 1-2), real hybrid search on all 3 remaining stores (Tasks 3-5), hardcoded-dimension fix (Task 6), embedding-space MMR (Task 7), real tokenizer (Task 8) — mirrors vectra-js's Phase 3 exactly, all 5 items covered for feature parity between the two SDKs.
