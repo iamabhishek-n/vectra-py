@@ -7,7 +7,7 @@ def make_config(client):
 
 
 class TestMilvusVectorStore:
-    async def test_add_documents_inserts_vector_content_and_json_metadata(self):
+    async def test_add_documents_inserts_vector_content_and_metadata(self):
         client = AsyncMock()
         store = MilvusVectorStore(make_config(client))
 
@@ -15,7 +15,7 @@ class TestMilvusVectorStore:
 
         client.insert.assert_called_once_with(
             collection_name="rag_collection",
-            fields_data=[{"vector": [0.1, 0.2], "content": "hello world", "metadata": '{"a": 1}'}],
+            fields_data=[{"vector": [0.1, 0.2], "content": "hello world", "metadata": {"a": 1}}],
         )
 
     async def test_delete_documents_returns_the_actual_delete_count(self):

@@ -1,4 +1,3 @@
-import json
 from typing import List, Dict, Any, Optional, Tuple
 from ..interfaces import VectorStore
 
@@ -9,11 +8,11 @@ class MilvusVectorStore(VectorStore):
         self.collection = config.table_name or 'rag_collection'
 
     async def add_documents(self, documents: List[Dict[str, Any]]):
-        data = [{ 'vector': d['embedding'], 'content': d['content'], 'metadata': json.dumps(d['metadata']) } for d in documents]
+        data = [{ 'vector': d['embedding'], 'content': d['content'], 'metadata': d['metadata'] } for d in documents]
         await self.client.insert(collection_name=self.collection, fields_data=data)
 
     async def upsert_documents(self, documents: List[Dict[str, Any]]):
-        data = [{ 'vector': d['embedding'], 'content': d['content'], 'metadata': json.dumps(d['metadata']) } for d in documents]
+        data = [{ 'vector': d['embedding'], 'content': d['content'], 'metadata': d['metadata'] } for d in documents]
         # Try upsert if available, else insert
         if hasattr(self.client, 'upsert'):
              await self.client.upsert(collection_name=self.collection, fields_data=data)
