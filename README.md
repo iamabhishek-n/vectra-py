@@ -126,9 +126,9 @@ All major subsystems are interface-driven and designed to be extended safely.
 ### Library
 
 ```bash
-pip install vectra-py
+pip install vectra-rag-py
 # or
-uv pip install vectra-py
+uv pip install vectra-rag-py
 ```
 
 ### Backends
