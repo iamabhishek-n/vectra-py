@@ -564,20 +564,32 @@ class VectraClient:
         def tokens(text: str) -> set:
             return set(t for t in re.findall(r"[a-zA-Z0-9]+", (text or "").lower()) if len(t) > 2)
 
+        def cosine_similarity(a, b) -> float:
+            if not isinstance(a, list) or not isinstance(b, list) or len(a) != len(b) or len(a) == 0:
+                return 0.0
+            dot = sum(x * y for x, y in zip(a, b))
+            norm_a = sum(x * x for x in a) ** 0.5
+            norm_b = sum(y * y for y in b) ** 0.5
+            if norm_a == 0.0 or norm_b == 0.0:
+                return 0.0
+            return dot / (norm_a * norm_b)
+
+        use_embeddings = all(isinstance(d.get("embedding"), list) and len(d["embedding"]) > 0 for d in candidates)
+
         cand = []
         for d in candidates:
             dd = dict(d)
-            dd["_tokens"] = tokens(dd.get("content", ""))
+            dd["_tokens"] = None if use_embeddings else tokens(dd.get("content", ""))
             dd["_rel"] = float(dd.get("score", 0.0) or 0.0)
             cand.append(dd)
 
         cand.sort(key=lambda x: x.get("_rel", 0.0), reverse=True)
         selected: List[Dict[str, Any]] = []
-        selected_tokens: List[set] = []
+        selected_diversity_keys: List[Any] = []
 
         first = cand.pop(0)
         selected.append(first)
-        selected_tokens.append(first.get("_tokens") or set())
+        selected_diversity_keys.append(first.get("embedding") if use_embeddings else (first.get("_tokens") or set()))
 
         def jaccard(a: set, b: set) -> float:
             if not a or not b:
@@ -593,10 +605,12 @@ class VectraClient:
             best_score = None
             for i, d in enumerate(cand):
                 rel = d.get("_rel", 0.0)
-                dt = d.get("_tokens") or set()
                 div = 0.0
-                for st in selected_tokens:
-                    div = max(div, jaccard(dt, st))
+                for key in selected_diversity_keys:
+                    if use_embeddings:
+                        div = max(div, cosine_similarity(d.get("embedding"), key))
+                    else:
+                        div = max(div, jaccard(d.get("_tokens") or set(), key))
                 score = lam * rel - (1.0 - lam) * div
                 if best_score is None or score > best_score:
                     best_score = score
@@ -605,7 +619,7 @@ class VectraClient:
                 break
             picked = cand.pop(best_idx)
             selected.append(picked)
-            selected_tokens.append(picked.get("_tokens") or set())
+            selected_diversity_keys.append(picked.get("embedding") if use_embeddings else (picked.get("_tokens") or set()))
 
         out = []
         for d in selected[:k_int]:
@@ -671,6 +685,13 @@ class VectraClient:
                 fetch_k = int(getattr(self.config.retrieval, "mmr_fetch_k", 20))
                 mmr_lam = float(getattr(self.config.retrieval, "mmr_lambda", 0.5))
                 candidates = await self.vector_store.similarity_search(query_vector, max(fetch_k, k), filter)
+                if candidates and hasattr(self.embedder, "embed_documents"):
+                    try:
+                        candidate_embeddings = await self.embedder.embed_documents([c["content"] for c in candidates])
+                        for c, emb in zip(candidates, candidate_embeddings):
+                            c["embedding"] = emb
+                    except Exception:
+                        pass  # Embedding-space MMR is best-effort; falls back to lexical Jaccard.
                 docs = self._mmr_select(candidates, k, mmr_lam)
 
             else: # NAIVE
