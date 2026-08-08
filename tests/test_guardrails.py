@@ -61,6 +61,22 @@ class TestBlockPii:
         elapsed = time.monotonic() - start
         assert elapsed < 1.0
 
+    def test_no_redos_on_long_text_with_at_sign(self):
+        # Regression test: the "@" in text pre-check only protects text with
+        # NO '@' character. The email regex itself was still unbounded
+        # (`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`) and exhibited
+        # catastrophic backtracking on long text that DOES contain '@' but no
+        # '.' to terminate the match (measured ~4.27s on 50k chars). The
+        # pattern must now use bounded quantifiers so this completes quickly
+        # regardless of max_query_length. There is no '.' in this text, so
+        # no email PII is actually present and no violation should be raised
+        # (matching the unbounded pattern's own behavior on this input).
+        text = "a" * 25000 + "@" + "b" * 25000
+        start = time.monotonic()
+        check_guardrails(text, GuardrailConfig(block_pii=True, max_query_length=len(text)))
+        elapsed = time.monotonic() - start
+        assert elapsed < 1.0
+
 
 class TestContentFilter:
     def test_allows_ordinary_query_when_off(self):

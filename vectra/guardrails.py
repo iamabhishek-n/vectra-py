@@ -11,9 +11,13 @@ import re
 # match text containing '@', so check_guardrails skips it entirely on text
 # with no '@' via a cheap O(n) pre-check — without that pre-check, the
 # email pattern exhibits catastrophic backtracking (ReDoS) on long text
-# with no '@' character.
+# with no '@' character. The email pattern's quantifiers are also bounded
+# ({1,64} / {1,255} / {2,24}, matching RFC 5321's practical limits) rather
+# than unbounded (`+`) — without that bound, text that DOES contain '@' but
+# no valid match (e.g. a long run of non-domain characters) still triggers
+# catastrophic backtracking, defeating the pre-check above.
 PII_PATTERNS = [
-    ("email", re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")),
+    ("email", re.compile(r"[a-zA-Z0-9._%+-]{1,64}@[a-zA-Z0-9.-]{1,255}\.[a-zA-Z]{2,24}")),
     ("phone", re.compile(r"(\+?\d{1,2}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b")),
     ("ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
     ("long_digit_run", re.compile(r"\b(?:\d[ -]?){13,19}\b")),
