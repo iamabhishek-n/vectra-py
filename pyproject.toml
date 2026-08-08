@@ -29,7 +29,8 @@ dependencies = [
     "requests",
     "asyncpg",
     "aiohttp",
-    "pysbd"
+    "pysbd",
+    "tiktoken"
 ]
 
 [project.optional-dependencies]

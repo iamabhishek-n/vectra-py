@@ -7,6 +7,7 @@ import asyncio
 import os
 import uuid
 import time
+import tiktoken
 from collections import OrderedDict
 from .config import VectraConfig, ProviderType, ChunkingStrategy, RetrievalStrategy
 from .observability import SQLiteLogger
@@ -26,6 +27,14 @@ from .backends.huggingface import HuggingFaceBackend
 from .reranker import get_reranker
 from .memory import InMemoryHistory, RedisHistory, PostgresHistory
 from .backends.ollama import OllamaBackend
+
+_token_encoder = None
+
+def _get_token_encoder():
+    global _token_encoder
+    if _token_encoder is None:
+        _token_encoder = tiktoken.get_encoding("cl100k_base")
+    return _token_encoder
 
 class LRUCache:
     def __init__(self, maxsize=10000):
@@ -448,9 +457,7 @@ class VectraClient:
     def _token_estimate(self, text: str) -> int:
         if not text:
             return 0
-        ascii_chars = sum(1 for c in text if ord(c) < 128)
-        non_ascii = len(text) - ascii_chars
-        return max(1, (ascii_chars + 3) // 4 + non_ascii)
+        return len(_get_token_encoder().encode(str(text)))
 
     def _build_context_parts(self, docs: List[Dict[str, Any]], query: str) -> Tuple[List[str], List[Dict[str, Any]]]:
         budget = int(self.config.query_planning.get('token_budget', 2048)) if getattr(self.config, 'query_planning', None) else 2048
