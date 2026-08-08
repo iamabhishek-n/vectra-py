@@ -102,4 +102,35 @@ class MilvusVectorStore(VectorStore):
         return getattr(result, "delete_count", 0)
 
     async def update_documents(self, filter: Dict[str, Any], update_data: Dict[str, Any]) -> int:
-        raise NotImplementedError("Milvus update_documents is not implemented")
+        if not update_data:
+            return 0
+        expr = self._filter_to_expr(filter)
+        if not hasattr(self.client, "query"):
+            raise NotImplementedError("Milvus client does not support query()")
+        docs = await self.client.query(
+            collection_name=self.collection,
+            expr=expr,
+            output_fields=["id", "vector", "content", "metadata"],
+            limit=100000,
+        )
+        docs = docs or []
+        if not docs:
+            return 0
+        new_content = update_data.get("content")
+        update_meta = update_data.get("metadata")
+        data = []
+        for d in docs:
+            metadata = d.get("metadata") or {}
+            if isinstance(update_meta, dict):
+                metadata = {**metadata, **update_meta}
+            data.append({
+                "id": d.get("id"),
+                "vector": d.get("vector"),
+                "content": new_content if isinstance(new_content, str) else d.get("content", ""),
+                "metadata": metadata,
+            })
+        if hasattr(self.client, "upsert"):
+            await self.client.upsert(collection_name=self.collection, fields_data=data)
+        else:
+            await self.client.insert(collection_name=self.collection, fields_data=data)
+        return len(data)

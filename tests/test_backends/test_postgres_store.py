@@ -41,3 +41,24 @@ class TestPostgresVectorStore:
         results = await store.similarity_search([0.1, 0.2, 0.3], limit=5)
 
         assert results == [{"id": "doc-1", "content": "hello world", "metadata": {"a": 1}, "score": 0.87}]
+
+    async def test_update_documents_sets_content_and_metadata(self):
+        client = FakeConn()
+        client.execute = AsyncMock(return_value="UPDATE 2")
+        store = PostgresVectorStore(make_config(client))
+
+        updated = await store.update_documents({"category": "docs"}, {"content": "new text"})
+
+        assert updated == 2
+        sql = client.execute.call_args[0][0]
+        assert "UPDATE" in sql
+        assert '"content" = $1' in sql
+
+    async def test_update_documents_returns_zero_for_empty_update_data(self):
+        client = FakeConn()
+        store = PostgresVectorStore(make_config(client))
+
+        updated = await store.update_documents({"category": "docs"}, {})
+
+        assert updated == 0
+        client.execute.assert_not_called()

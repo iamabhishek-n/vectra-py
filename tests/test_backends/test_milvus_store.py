@@ -36,3 +36,29 @@ class TestMilvusVectorStore:
         deleted = await store.delete_documents({"category": "docs"})
 
         assert deleted == 7
+
+    async def test_update_documents_merges_metadata_and_reupserts_with_existing_vector(self):
+        client = AsyncMock()
+        client.query = AsyncMock(return_value=[
+            {"id": 1, "vector": [0.1, 0.2], "content": "old text", "metadata": {"a": 1}},
+        ])
+        client.upsert = AsyncMock()
+        store = MilvusVectorStore(make_config(client))
+
+        updated = await store.update_documents({"category": "docs"}, {"metadata": {"b": 2}})
+
+        assert updated == 1
+        client.upsert.assert_called_once()
+        fields = client.upsert.call_args.kwargs["fields_data"]
+        assert fields[0]["vector"] == [0.1, 0.2]
+        assert fields[0]["content"] == "old text"
+        assert fields[0]["metadata"] == {"a": 1, "b": 2}
+
+    async def test_update_documents_returns_zero_when_nothing_matches(self):
+        client = AsyncMock()
+        client.query = AsyncMock(return_value=[])
+        store = MilvusVectorStore(make_config(client))
+
+        updated = await store.update_documents({"category": "docs"}, {"metadata": {"b": 2}})
+
+        assert updated == 0

@@ -171,7 +171,23 @@ class PostgresVectorStore(VectorStore):
             return int(res.split(' ')[1]) if res else 0
         
     async def update_documents(self, filter: Dict[str, Any], update_data: Dict[str, Any]) -> int:
-        raise NotImplementedError
+        if not update_data:
+            return 0
+        set_parts = []
+        params: List[Any] = []
+        if "content" in update_data and update_data["content"] is not None:
+            params.append(update_data["content"])
+            set_parts.append(f'"{self.c_content}" = ${len(params)}')
+        if "metadata" in update_data and isinstance(update_data["metadata"], dict):
+            params.append(json.dumps(update_data["metadata"]))
+            set_parts.append(f'"{self.c_meta}" = ${len(params)}')
+        if not set_parts:
+            return 0
+        params.append(json.dumps(filter))
+        sql = f'UPDATE "{self.table_name}" SET {", ".join(set_parts)} WHERE "{self.c_meta}" @> ${len(params)}::jsonb'
+        async with self._get_connection() as conn:
+            res = await conn.execute(sql, *params)
+            return int(res.split(' ')[1]) if res else 0
 
     async def list_documents(self, filter: Optional[Dict[str, Any]] = None, limit: int = 100, cursor: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         where_parts = []
