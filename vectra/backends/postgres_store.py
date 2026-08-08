@@ -180,7 +180,7 @@ class PostgresVectorStore(VectorStore):
             set_parts.append(f'"{self.c_content}" = ${len(params)}')
         if "metadata" in update_data and isinstance(update_data["metadata"], dict):
             params.append(json.dumps(update_data["metadata"]))
-            set_parts.append(f'"{self.c_meta}" = ${len(params)}')
+            set_parts.append(f'"{self.c_meta}" = COALESCE("{self.c_meta}", \'{{}}\'::jsonb) || ${len(params)}::jsonb')
         if not set_parts:
             return 0
         params.append(json.dumps(filter))

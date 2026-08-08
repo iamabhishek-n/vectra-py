@@ -62,3 +62,18 @@ class TestPostgresVectorStore:
 
         assert updated == 0
         client.execute.assert_not_called()
+
+    async def test_update_documents_merges_metadata_instead_of_replacing_it(self):
+        """Metadata updates must merge onto existing JSONB, not replace it wholesale —
+        a bare `= $n` would wipe out keys like fileSHA256/fileSize/lastModified that
+        file_exists() depends on for ingestion dedup."""
+        client = FakeConn()
+        client.execute = AsyncMock(return_value="UPDATE 1")
+        store = PostgresVectorStore(make_config(client))
+
+        updated = await store.update_documents({"category": "docs"}, {"metadata": {"b": 2}})
+
+        assert updated == 1
+        sql = client.execute.call_args[0][0]
+        assert 'COALESCE("metadata", \'{}\'::jsonb) || $1::jsonb' in sql
+        assert '"metadata" = $1' not in sql
