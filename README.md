@@ -533,21 +533,21 @@ Callbacks allow hooking into ingestion, retrieval, reranking, and generation sta
  * **Measure adoption**: Helps us understand which providers (OpenAI vs Gemini) and vector stores are most popular.
  * **Drop support safely**: We can see if anyone is still using Python 3.8 before dropping it.
  
- ### How to opt-out
- Telemetry is **enabled by default**. To disable it:
+ ### How to opt-in
+ Telemetry is **disabled by default**. To enable it:
  
- **Option 1: Config**
+ **Config**
  ```python
  client = VectraClient(
      VectraConfig(
          # ...
-         telemetry={'enabled': False}
+         telemetry={'enabled': True}
      )
  )
  ```
  
- **Option 2: Environment Variable**
- Set `VECTRA_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`.
+ ### Force-disable (even if opted in)
+ Set `VECTRA_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1` as an environment variable. These always win over the config setting.
  
  ---
  
