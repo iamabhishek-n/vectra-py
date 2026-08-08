@@ -1,5 +1,7 @@
 import re
 import json
+import os
+import aiohttp
 from typing import List, Dict, Any, Union
 from .config import RerankingConfig, RerankingProvider
 
@@ -58,22 +60,48 @@ class CrossEncoderReranker:
     async def rerank(self, query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not documents:
             return []
-        
-        docs_to_rank = documents[:self.config.window_size]
-        
-        # This is a placeholder for specific provider implementations (Cohere, Jina, etc.)
-        # In a real implementation, we would call the respective API here.
-        # For now, we'll implement a generic pattern.
-        
-        if self.config.provider == RerankingProvider.COHERE:
-            # Placeholder for Cohere API call
-            return await self._mock_api_rerank(query, docs_to_rank)
-        
-        # Default fallback
-        return documents[:self.config.top_n]
 
-    async def _mock_api_rerank(self, query, docs):
-        # Implementation of API-based reranking would go here
+        docs_to_rank = documents[:self.config.window_size]
+
+        try:
+            if self.config.provider == RerankingProvider.COHERE:
+                return await self._cohere_rerank(query, docs_to_rank)
+            if self.config.provider == RerankingProvider.JINA:
+                return await self._jina_rerank(query, docs_to_rank)
+            if self.config.provider == RerankingProvider.CROSS_ENCODER:
+                raise NotImplementedError(
+                    "RerankingProvider.CROSS_ENCODER (local model) is not implemented in vectra-py. "
+                    "Use RerankingProvider.COHERE, RerankingProvider.JINA, or RerankingProvider.LLM instead."
+                )
+            return documents[:self.config.top_n]
+        except NotImplementedError:
+            raise
+        except Exception:
+            return docs_to_rank[:self.config.top_n]
+
+    async def _cohere_rerank(self, query: str, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        api_key = getattr(self.config, "api_key", None) or os.getenv("COHERE_API_KEY")
+        if not api_key:
+            return docs[:self.config.top_n]
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.cohere.com/v2/rerank",
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": getattr(self.config, "model_name", None) or "rerank-v3.5",
+                    "query": query,
+                    "documents": [d["content"] for d in docs],
+                    "top_n": min(self.config.top_n, len(docs)),
+                },
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as res:
+                if res.status != 200:
+                    raise Exception(f"Cohere rerank API error: {res.status}")
+                data = await res.json()
+                return [docs[r["index"]] for r in data["results"]]
+
+    async def _jina_rerank(self, query: str, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # Implemented in Task 2.
         return docs[:self.config.top_n]
 
 def get_reranker(config: RerankingConfig, llm=None):
