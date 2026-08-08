@@ -1,3 +1,4 @@
+import json
 from typing import List, Dict, Any, Optional, Tuple
 from ..interfaces import VectorStore
 
@@ -8,11 +9,11 @@ class MilvusVectorStore(VectorStore):
         self.collection = config.table_name or 'rag_collection'
 
     async def add_documents(self, documents: List[Dict[str, Any]]):
-        data = [{ 'vector': d['embedding'], 'content': d['content'], 'metadata': d['metadata'] } for d in documents]
+        data = [{ 'vector': d['embedding'], 'content': d['content'], 'metadata': json.dumps(d['metadata']) } for d in documents]
         await self.client.insert(collection_name=self.collection, fields_data=data)
 
     async def upsert_documents(self, documents: List[Dict[str, Any]]):
-        data = [{ 'vector': d['embedding'], 'content': d['content'], 'metadata': d['metadata'] } for d in documents]
+        data = [{ 'vector': d['embedding'], 'content': d['content'], 'metadata': json.dumps(d['metadata']) } for d in documents]
         # Try upsert if available, else insert
         if hasattr(self.client, 'upsert'):
              await self.client.upsert(collection_name=self.collection, fields_data=data)
@@ -96,8 +97,10 @@ class MilvusVectorStore(VectorStore):
         expr = self._filter_to_expr(filter)
         if not hasattr(self.client, "delete"):
             raise NotImplementedError("Milvus client does not support delete()")
-        await self.client.delete(collection_name=self.collection, expr=expr)
-        return 0
+        result = await self.client.delete(collection_name=self.collection, expr=expr)
+        if isinstance(result, dict):
+            return result.get("delete_count", 0)
+        return getattr(result, "delete_count", 0)
 
     async def update_documents(self, filter: Dict[str, Any], update_data: Dict[str, Any]) -> int:
         raise NotImplementedError("Milvus update_documents is not implemented")
