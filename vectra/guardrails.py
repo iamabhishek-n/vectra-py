@@ -19,6 +19,18 @@ PII_PATTERNS = [
     ("long_digit_run", re.compile(r"\b(?:\d[ -]?){13,19}\b")),
 ]
 
+# Minimal seed list of clearly harmful query patterns. This is a baseline,
+# not exhaustive content moderation — extend DEFAULT_BLOCKED_TERMS for your
+# deployment's needs, or replace check_guardrails' content_filter branch
+# with an LLM-based classifier if you need semantic (not just keyword)
+# coverage. Mirrors vectra-js's src/guardrails.js DEFAULT_BLOCKED_TERMS.
+DEFAULT_BLOCKED_TERMS = [
+    "how to make a bomb",
+    "how to build a bomb",
+    "how to make explosives",
+    "how to synthesize a bioweapon",
+]
+
 
 def check_guardrails(query: str, guardrails_config) -> None:
     if guardrails_config is None:
@@ -43,3 +55,13 @@ def check_guardrails(query: str, guardrails_config) -> None:
         for name, pattern in PII_PATTERNS[1:]:
             if pattern.search(text):
                 raise ValueError(f"GuardrailViolation: possible PII detected ({name})")
+
+    if getattr(guardrails_config, "content_filter", False):
+        lower = text.lower()
+        # Combine the built-in seed list with any user-supplied blocked_terms
+        # from GuardrailConfig, so deployments can extend content filtering
+        # from the public API instead of editing DEFAULT_BLOCKED_TERMS directly.
+        terms = list(DEFAULT_BLOCKED_TERMS) + list(getattr(guardrails_config, "blocked_terms", None) or [])
+        for term in terms:
+            if term.lower() in lower:
+                raise ValueError("GuardrailViolation: query blocked by content filter")

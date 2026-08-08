@@ -11,6 +11,7 @@ from collections import OrderedDict
 from .config import VectraConfig, ProviderType, ChunkingStrategy, RetrievalStrategy
 from .observability import SQLiteLogger
 from .telemetry import telemetry
+from .guardrails import check_guardrails
 from .processor import DocumentProcessor
 from .backends.openai import OpenAIBackend
 from .backends.gemini import GeminiBackend
@@ -607,6 +608,7 @@ class VectraClient:
         return out
 
     async def query_rag(self, query: str, filter: Optional[Dict] = None, stream: bool = False, session_id: Optional[str] = None) -> Dict[str, Any] | AsyncGenerator[str, None]:
+        check_guardrails(query, self.config.guardrails)
         trace_id = str(uuid.uuid4())
         root_span_id = str(uuid.uuid4())
         

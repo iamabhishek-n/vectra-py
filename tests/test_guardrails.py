@@ -60,3 +60,27 @@ class TestBlockPii:
         check_guardrails(text, GuardrailConfig(block_pii=True, max_query_length=len(text)))
         elapsed = time.monotonic() - start
         assert elapsed < 1.0
+
+
+class TestContentFilter:
+    def test_allows_ordinary_query_when_off(self):
+        check_guardrails("how do I make a sandwich", GuardrailConfig(content_filter=False))
+
+    def test_rejects_blocked_term_when_on(self):
+        with pytest.raises(ValueError, match="GuardrailViolation: query blocked by content filter"):
+            check_guardrails("how to make a bomb at home", GuardrailConfig(content_filter=True))
+
+    def test_is_case_insensitive(self):
+        with pytest.raises(ValueError, match="GuardrailViolation: query blocked by content filter"):
+            check_guardrails("HOW TO MAKE A BOMB", GuardrailConfig(content_filter=True))
+
+    def test_allows_unrelated_query_when_on(self):
+        check_guardrails("what vector stores does this SDK support?", GuardrailConfig(content_filter=True))
+
+    def test_custom_blocked_terms_combine_with_defaults(self):
+        # Custom blocked_terms must extend, not replace, DEFAULT_BLOCKED_TERMS.
+        config = GuardrailConfig(content_filter=True, blocked_terms=["forbidden custom phrase"])
+        with pytest.raises(ValueError, match="GuardrailViolation: query blocked by content filter"):
+            check_guardrails("this contains a forbidden custom phrase right here", config)
+        with pytest.raises(ValueError, match="GuardrailViolation: query blocked by content filter"):
+            check_guardrails("how to make a bomb at home", config)

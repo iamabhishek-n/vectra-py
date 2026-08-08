@@ -111,6 +111,7 @@ class GuardrailConfig(BaseModel):
     block_off_topic: bool = False     # Reject queries unrelated to ingested docs
     max_query_length: int = 2000
     content_filter: bool = False      # Block harmful content generation
+    blocked_terms: List[str] = []     # Extra terms to block, combined with DEFAULT_BLOCKED_TERMS
     hallucination_check: bool = False # Verify claims against retrieved context
 
 class VectraConfig(BaseModel):
