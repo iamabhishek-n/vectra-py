@@ -684,15 +684,22 @@ class VectraClient:
             elif strategy == RetrievalStrategy.MMR:
                 fetch_k = int(getattr(self.config.retrieval, "mmr_fetch_k", 20))
                 mmr_lam = float(getattr(self.config.retrieval, "mmr_lambda", 0.5))
-                candidates = await self.vector_store.similarity_search(query_vector, max(fetch_k, k), filter)
-                if candidates and hasattr(self.embedder, "embed_documents"):
-                    try:
-                        candidate_embeddings = await self.embedder.embed_documents([c["content"] for c in candidates])
-                        for c, emb in zip(candidates, candidate_embeddings):
-                            c["embedding"] = emb
-                    except Exception:
-                        pass  # Embedding-space MMR is best-effort; falls back to lexical Jaccard.
-                docs = self._mmr_select(candidates, k, mmr_lam)
+
+                if fetch_k <= k:
+                    # When fetch_k <= k, MMR will return all candidates anyway (no selection needed).
+                    # Skip unnecessary embedding call.
+                    docs = await self.vector_store.similarity_search(query_vector, k, filter)
+                else:
+                    # When fetch_k > k, need to use MMR to select the top k with diversity consideration.
+                    candidates = await self.vector_store.similarity_search(query_vector, fetch_k, filter)
+                    if candidates and hasattr(self.embedder, "embed_documents"):
+                        try:
+                            candidate_embeddings = await self.embedder.embed_documents([c["content"] for c in candidates])
+                            for c, emb in zip(candidates, candidate_embeddings):
+                                c["embedding"] = emb
+                        except Exception:
+                            pass  # Embedding-space MMR is best-effort; falls back to lexical Jaccard.
+                    docs = self._mmr_select(candidates, k, mmr_lam)
 
             else: # NAIVE
                 docs = await self.vector_store.similarity_search(query_vector, k, filter)
