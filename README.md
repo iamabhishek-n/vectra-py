@@ -39,11 +39,12 @@ If you find this project useful, consider supporting it:<br>
   * [Observability Dashboard](#observability-dashboard)
 * [13. Observability & Callbacks](#13-observability--callbacks)
 * [14. Telemetry](#14-telemetry)
-* [15. Database Schemas & Indexing](#15-database-schemas--indexing)
-* [16. Extending Vectra](#16-extending-vectra)
-* [17. Architecture Overview](#17-architecture-overview)
-* [18. Development & Contribution Guide](#18-development--contribution-guide)
-* [19. Production Best Practices](#19-production-best-practices)
+* [15. Guardrails](#15-guardrails)
+* [16. Database Schemas & Indexing](#16-database-schemas--indexing)
+* [17. Extending Vectra](#17-extending-vectra)
+* [18. Architecture Overview](#18-architecture-overview)
+* [19. Development & Contribution Guide](#19-development--contribution-guide)
+* [20. Production Best Practices](#20-production-best-practices)
 
 ---
 
@@ -521,8 +522,9 @@ Callbacks allow hooking into ingestion, retrieval, reranking, and generation sta
  * **Identity**: A random UUID (`distinct_id`) stored locally in `~/.vectra/telemetry.json`. **No PII, emails, IPs, or hostnames.**
  * **Events**:
      * `sdk_initialized`: Config shape (providers used), OS/Runtime version, session type (api/cli/chat).
-     * `ingest_started/completed`: Source type, chunking strategy, duration bucket, chunk count bucket.
-     * `query_executed`: Retrieval strategy, query mode (rag), result count, latency bucket.
+     * `ingest_batch_started`: File count, ingestion mode.
+     * `ingest_batch_completed`: File count, chunk count, duration in milliseconds.
+     * `query_executed`: Retrieval strategy, query mode (rag), reranking enabled, streaming, memory used, result count. No latency is currently tracked on this event.
      * `feature_used`: WebConfig/Dashboard usage.
      * `evaluation_run`: Dataset size bucket.
      * `error_occurred`: Error type and stage (no stack traces).
@@ -551,7 +553,37 @@ Callbacks allow hooking into ingestion, retrieval, reranking, and generation sta
  
  ---
  
- ## 15. Database Schemas & Indexing
+ ## 15. Guardrails
+ 
+ As of this version, `query_rag` enforces basic guardrails by default:
+ 
+ - **`max_query_length`** (default: 2000 characters) — queries longer than this are rejected before any embedding or LLM call.
+ - **`block_pii`** (default: off) — when enabled, rejects queries containing an apparent email address, phone number, SSN-shaped number, or long digit run.
+ - **`content_filter`** (default: off) — when enabled, rejects queries matching a built-in list of clearly harmful phrases, extendable via `blocked_terms`.
+ 
+ Document ingestion also enforces a file-size limit by default:
+ 
+ - **`ingestion.max_file_size_bytes`** (default: 52428800 = 50MB) — files larger than this are rejected before being read.
+ 
+ ### Upgrading from an earlier version
+ 
+ The 2000-character query limit and 50MB file-size limit are new as of this release and are enforced even if you don't set a `guardrails` or `ingestion` block in your config — they were previously present in the config schema but not enforced. To raise or effectively disable a limit, set it explicitly:
+ 
+ ```python
+ config = VectraConfig(
+     # ... other config ...
+     guardrails={'max_query_length': 10000},
+     ingestion={'max_file_size_bytes': 200 * 1024 * 1024},  # 200MB
+ )
+ 
+ client = VectraClient(config)
+ ```
+ 
+ See `vectra/guardrails.py` for the exact PII/content-filter detection logic.
+ 
+ ---
+ 
+ ## 16. Database Schemas & Indexing
 
 ```prisma
 model Document {
@@ -565,19 +597,19 @@ model Document {
 
 ---
 
-## 16. Extending Vectra
+## 17. Extending Vectra
 
 Implement custom vector stores by extending `VectorStore`.
 
 ---
 
-## 17. Architecture Overview
+## 18. Architecture Overview
 
 Vectra follows a modular, provider-agnostic RAG architecture with clear separation of ingestion, retrieval, and generation pipelines.
 
 ---
 
-## 18. Development & Contribution Guide
+## 19. Development & Contribution Guide
 
 * Python 3.8+
 * Async-first (`asyncio`)
@@ -585,7 +617,7 @@ Vectra follows a modular, provider-agnostic RAG architecture with clear separati
 
 ---
 
-## 19. Production Best Practices
+## 20. Production Best Practices
 
 * Match embedding dimensions to pgvector
 * Prefer Hybrid retrieval
