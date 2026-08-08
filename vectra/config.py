@@ -56,7 +56,7 @@ class ChunkingConfig(BaseModel):
     chunk_size: int = 1000
     chunk_overlap: int = 200
     separators: List[str] = ['\n\n', '\n', ' ', '']
-    agentic_llm: Optional[LLMConfig] = None
+    agentic_llm: Optional[LLMConfig] = Field(default=None, validate_default=True)
 
     @field_validator('agentic_llm')
     def check_agentic_llm(cls, v, info):
@@ -75,7 +75,7 @@ class RerankingConfig(BaseModel):
 
 class RetrievalConfig(BaseModel):
     strategy: RetrievalStrategy = RetrievalStrategy.NAIVE
-    llm_config: Optional[LLMConfig] = None
+    llm_config: Optional[LLMConfig] = Field(default=None, validate_default=True)
     hybrid_alpha: float = 0.5 # Alpha 0-1 (0 = keyword, 1 = dense)
     mmr_lambda: float = 0.5
     mmr_fetch_k: int = 20
@@ -104,7 +104,7 @@ class ObservabilityConfig(BaseModel):
     session_tracking: bool = True
 
 class TelemetryConfig(BaseModel):
-    enabled: bool = True
+    enabled: bool = False
 
 class GuardrailConfig(BaseModel):
     block_pii: bool = False           # Detect and redact PII in outputs

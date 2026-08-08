@@ -41,7 +41,7 @@ class TelemetryManager:
 
         self.distinct_id = None
         self.queue = []
-        self.enabled = True
+        self.enabled = False
         self.lock = threading.Lock()
         self.worker = None
         self.stop_event = threading.Event()
@@ -71,7 +71,7 @@ class TelemetryManager:
             elif isinstance(config, dict):
                 telemetry_cfg = config.get("telemetry", {})
 
-        if telemetry_cfg.get("enabled") is False:
+        if telemetry_cfg.get("enabled") is not True:
             self.enabled = False
             return
 
@@ -79,6 +79,7 @@ class TelemetryManager:
             self.enabled = False
             return
 
+        self.enabled = True
         self._load_identity()
         self._start_worker()
 
