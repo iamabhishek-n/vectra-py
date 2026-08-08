@@ -18,7 +18,7 @@ class TestMilvusHybridSearch:
         # test only checks the lexical signal is present at all; the
         # semantic-ranking-direction case (which requires the L2 metric to be
         # discriminating) is covered by
-        # test_semantic_ranking_is_inverted_until_task_9_fix below.
+        # test_semantic_ranking_respects_l2_metric_type below.
         client = AsyncMock()
         client.search = AsyncMock(return_value={
             "results": [

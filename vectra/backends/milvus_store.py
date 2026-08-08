@@ -17,7 +17,7 @@ class MilvusVectorStore(VectorStore):
         # search-hit object alone, so it must be told explicitly. Default to
         # 'COSINE' (Milvus's own common default) which preserves the old
         # passthrough behavior for the common case.
-        self.metric_type = (getattr(self.config, 'metric_type', None) or 'COSINE').upper()
+        self.metric_type = (getattr(self.config, 'metric_type', None) or 'COSINE').strip().upper()
 
     async def add_documents(self, documents: List[Dict[str, Any]]):
         data = [{ 'vector': d['embedding'], 'content': d['content'], 'metadata': d['metadata'] } for d in documents]
@@ -67,7 +67,7 @@ class MilvusVectorStore(VectorStore):
         except (TypeError, ValueError):
             return 0.0
         if self.metric_type == 'L2':
-            return 1.0 / (1.0 + n)
+            return 1.0 / (1.0 + max(0.0, n))
         return n
 
     def _lexical_overlap(self, query: str, content: str) -> float:

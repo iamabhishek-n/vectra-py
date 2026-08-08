@@ -93,6 +93,33 @@ class TestMilvusScoreNormalizationL2:
         assert scores["near doc"] == pytest.approx(1.0 / 1.5)
         assert scores["far doc"] < scores["near doc"]
 
+    async def test_l2_negative_distance_does_not_raise(self):
+        # Real L2 distance is never negative, but a misbehaving client
+        # returning one must not crash the store with a ZeroDivisionError
+        # (1/(1+n) is undefined at n=-1) or produce a non-monotonic result.
+        client = AsyncMock()
+        client.search = AsyncMock(return_value={
+            "results": [
+                {"content": "bad distance", "metadata": {}, "distance": -1.0},
+            ]
+        })
+        store = MilvusVectorStore(make_config(client, metric_type="L2"))
+
+        results = await store.similarity_search([0.1, 0.2], limit=1)
+
+        assert results[0]["score"] == pytest.approx(1.0)
+
+    async def test_metric_type_is_case_and_whitespace_insensitive(self):
+        client = AsyncMock()
+        client.search = AsyncMock(return_value={
+            "results": [{"content": "doc", "metadata": {}, "distance": 1.0}],
+        })
+        store = MilvusVectorStore(make_config(client, metric_type=" l2 "))
+
+        results = await store.similarity_search([0.1, 0.2], limit=1)
+
+        assert results[0]["score"] == pytest.approx(0.5)
+
 
 class TestMilvusMetricTypeThroughPublicConfig:
     async def test_metric_type_set_via_vectra_client_config_reaches_milvus_store(self):
