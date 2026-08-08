@@ -28,3 +28,13 @@ class TestMilvusFilterSafety:
         store = MilvusVectorStore(make_config())
         with pytest.raises(ValueError, match="Unsafe filter key"):
             store._filter_to_expr({'category"] == "x" or metadata["injected': "docs"})
+
+    def test_rejects_unsupported_filter_value_type(self):
+        # Regression test: an unsupported value type (e.g. a list) must fail
+        # loudly instead of being silently skipped. Silently dropping it
+        # could turn a caller's intended scoped filter into an unfiltered
+        # query that returns every document (a fail-open, multi-tenant-unsafe
+        # bug) instead of raising.
+        store = MilvusVectorStore(make_config())
+        with pytest.raises(ValueError, match="Unsupported filter value type"):
+            store._filter_to_expr({"tags": ["a", "b"]})

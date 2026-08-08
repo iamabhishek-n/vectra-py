@@ -77,6 +77,8 @@ class MilvusVectorStore(VectorStore):
                 parts.append(f'metadata["{k}"] == {str(v).lower()}')
             elif isinstance(v, (int, float)):
                 parts.append(f'metadata["{k}"] == {v}')
+            else:
+                raise ValueError(f"Unsupported filter value type for Milvus expression: {k!r}={type(v).__name__}")
         return " and ".join(parts)
 
     async def list_documents(self, filter: Optional[Dict[str, Any]] = None, limit: int = 100, cursor: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Optional[str]]:
