@@ -1,5 +1,12 @@
 from typing import List, Dict, Any, Optional, Tuple
+import re
 from ..interfaces import VectorStore
+
+_SAFE_FILTER_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _escape_milvus_string(value: str) -> str:
+    return value.replace('\\', '\\\\').replace('"', '\\"')
 
 class MilvusVectorStore(VectorStore):
     def __init__(self, config):
@@ -62,8 +69,10 @@ class MilvusVectorStore(VectorStore):
             return ""
         parts: List[str] = []
         for k, v in filter.items():
+            if not _SAFE_FILTER_KEY_RE.fullmatch(str(k)):
+                raise ValueError(f"Unsafe filter key for Milvus expression: {k!r}")
             if isinstance(v, str):
-                parts.append(f'metadata["{k}"] == "{v}"')
+                parts.append(f'metadata["{k}"] == "{_escape_milvus_string(v)}"')
             elif isinstance(v, bool):
                 parts.append(f'metadata["{k}"] == {str(v).lower()}')
             elif isinstance(v, (int, float)):
