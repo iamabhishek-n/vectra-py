@@ -101,8 +101,25 @@ class CrossEncoderReranker:
                 return [docs[r["index"]] for r in data["results"]]
 
     async def _jina_rerank(self, query: str, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        # Implemented in Task 2.
-        return docs[:self.config.top_n]
+        api_key = getattr(self.config, "api_key", None) or os.getenv("JINA_API_KEY")
+        if not api_key:
+            return docs[:self.config.top_n]
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.jina.ai/v1/rerank",
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": getattr(self.config, "model_name", None) or "jina-reranker-v2-base-multilingual",
+                    "query": query,
+                    "documents": [d["content"] for d in docs],
+                    "top_n": min(self.config.top_n, len(docs)),
+                },
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as res:
+                if res.status != 200:
+                    raise Exception(f"Jina rerank API error: {res.status}")
+                data = await res.json()
+                return [docs[r["index"]] for r in data["results"]]
 
 def get_reranker(config: RerankingConfig, llm=None):
     if config.provider == RerankingProvider.LLM:
