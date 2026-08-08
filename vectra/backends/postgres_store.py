@@ -1,9 +1,23 @@
 import json
 import logging
 import uuid
+import re
 from typing import List, Dict, Any, Optional, Tuple
 import asyncio
 from ..interfaces import VectorStore
+
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def is_safe_identifier(value: str) -> bool:
+    return isinstance(value, str) and bool(_SAFE_IDENTIFIER_RE.fullmatch(value))
+
+
+def assert_safe_identifier(value: str, label: str) -> str:
+    if not is_safe_identifier(value):
+        raise ValueError(f"Unsafe SQL identifier for {label}: {value!r}")
+    return value
+
 
 def to_db_vector(vector: List[float]) -> str:
     return f"[{','.join(map(str, vector))}]"
@@ -12,11 +26,11 @@ class PostgresVectorStore(VectorStore):
     def __init__(self, config: Any):
         self.config = config
         self.client = config.client_instance
-        self.table_name = getattr(config, 'table_name', 'document')
+        self.table_name = assert_safe_identifier(getattr(config, 'table_name', 'document') or 'document', 'table_name')
         self.column_map = getattr(config, 'column_map', {})
-        self.c_content = self.column_map.get('content', 'content')
-        self.c_meta = self.column_map.get('metadata', 'metadata')
-        self.c_vector = self.column_map.get('vector', 'vector')
+        self.c_content = assert_safe_identifier(self.column_map.get('content', 'content'), 'column_map.content')
+        self.c_meta = assert_safe_identifier(self.column_map.get('metadata', 'metadata'), 'column_map.metadata')
+        self.c_vector = assert_safe_identifier(self.column_map.get('vector', 'vector'), 'column_map.vector')
         
     def _get_connection(self):
         """Helper to support both single asyncpg connection and Pool."""
