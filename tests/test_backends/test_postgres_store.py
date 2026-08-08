@@ -63,6 +63,44 @@ class TestPostgresVectorStore:
         assert updated == 0
         client.execute.assert_not_called()
 
+    async def test_hybrid_search_fuses_semantic_and_lexical_results_not_a_passthrough(self):
+        """hybrid_search must do real lexical+semantic RRF fusion, not just delegate to
+        similarity_search — a lexical-only match (absent from the semantic result set)
+        should still surface in the fused output, and a full-text-search query must be
+        issued against the content column."""
+        client = FakeConn()
+        semantic_rows = [
+            {"id": "doc-1", "content": "alpha content", "metadata": "{}", "distance": 0.1},
+            {"id": "doc-2", "content": "beta content", "metadata": "{}", "distance": 0.2},
+        ]
+        lexical_rows = [
+            {"id": "doc-3", "content": "gamma keyword match", "metadata": "{}"},
+        ]
+        client.fetch = AsyncMock(side_effect=[semantic_rows, lexical_rows])
+        store = PostgresVectorStore(make_config(client))
+
+        results = await store.hybrid_search("keyword", [0.1, 0.2, 0.3], limit=5)
+
+        assert client.fetch.call_count == 2
+        ids = [r["id"] for r in results]
+        assert "doc-3" in ids  # lexical-only hit must be present -- proves real fusion happened
+
+        lexical_sql = client.fetch.call_args_list[1][0][0]
+        assert "to_tsvector" in lexical_sql
+        assert "plainto_tsquery" in lexical_sql
+
+    async def test_hybrid_search_falls_back_to_semantic_only_when_lexical_query_fails(self):
+        client = FakeConn()
+        semantic_rows = [
+            {"id": "doc-1", "content": "alpha content", "metadata": "{}", "distance": 0.1},
+        ]
+        client.fetch = AsyncMock(side_effect=[semantic_rows, Exception("fts unavailable")])
+        store = PostgresVectorStore(make_config(client))
+
+        results = await store.hybrid_search("keyword", [0.1, 0.2, 0.3], limit=5)
+
+        assert [r["id"] for r in results] == ["doc-1"]
+
     async def test_update_documents_merges_metadata_instead_of_replacing_it(self):
         """Metadata updates must merge onto existing JSONB, not replace it wholesale —
         a bare `= $n` would wipe out keys like fileSHA256/fileSize/lastModified that

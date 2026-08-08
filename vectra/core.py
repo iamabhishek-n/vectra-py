@@ -29,11 +29,15 @@ from .memory import InMemoryHistory, RedisHistory, PostgresHistory
 from .backends.ollama import OllamaBackend
 
 _token_encoder = None
+_token_encoder_unavailable = False
 
 def _get_token_encoder():
-    global _token_encoder
-    if _token_encoder is None:
-        _token_encoder = tiktoken.get_encoding("cl100k_base")
+    global _token_encoder, _token_encoder_unavailable
+    if _token_encoder is None and not _token_encoder_unavailable:
+        try:
+            _token_encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            _token_encoder_unavailable = True
     return _token_encoder
 
 class LRUCache:
@@ -457,7 +461,17 @@ class VectraClient:
     def _token_estimate(self, text: str) -> int:
         if not text:
             return 0
-        return len(_get_token_encoder().encode(str(text)))
+        encoder = _get_token_encoder()
+        if encoder is None:
+            # Offline / egress-restricted fallback: tiktoken's first call downloads the
+            # BPE vocab over the network and has no built-in offline mode. If that fails
+            # (or previously failed -- see _token_encoder_unavailable), fall back to the
+            # original pre-Phase-3 character-count heuristic so this path never raises.
+            s = str(text)
+            ascii_chars = sum(1 for c in s if ord(c) < 128)
+            non_ascii = len(s) - ascii_chars
+            return max(1, (ascii_chars + 3) // 4 + non_ascii)
+        return len(encoder.encode(str(text)))
 
     def _build_context_parts(self, docs: List[Dict[str, Any]], query: str) -> Tuple[List[str], List[Dict[str, Any]]]:
         budget = int(self.config.query_planning.get('token_budget', 2048)) if getattr(self.config, 'query_planning', None) else 2048

@@ -1,3 +1,5 @@
+from unittest.mock import patch
+import vectra.core as core
 from vectra.core import VectraClient
 
 
@@ -16,3 +18,34 @@ class TestTokenEstimate:
         old_heuristic = max(1, (len(text) + 3) // 4)
         real = VectraClient._token_estimate(None, text)
         assert real < old_heuristic
+
+
+class TestTokenEstimateOfflineFallback:
+    def setup_method(self):
+        # Reset the module-level lazy-encoder cache/sentinel so each test controls
+        # whether tiktoken.get_encoding succeeds or fails, independent of test order.
+        core._token_encoder = None
+        core._token_encoder_unavailable = False
+
+    def teardown_method(self):
+        core._token_encoder = None
+        core._token_encoder_unavailable = False
+
+    def test_falls_back_to_char_heuristic_when_tiktoken_get_encoding_raises(self):
+        text = "Hello, world! éè"  # mix of ascii + non-ascii to exercise both branches
+        ascii_chars = sum(1 for c in text if ord(c) < 128)
+        non_ascii = len(text) - ascii_chars
+        expected = max(1, (ascii_chars + 3) // 4 + non_ascii)
+
+        with patch("vectra.core.tiktoken.get_encoding", side_effect=Exception("network error")):
+            result = VectraClient._token_estimate(None, text)
+
+        assert result == expected
+
+    def test_does_not_retry_the_network_call_after_first_failure(self):
+        with patch("vectra.core.tiktoken.get_encoding", side_effect=Exception("network error")) as mock_get_encoding:
+            VectraClient._token_estimate(None, "first call")
+            VectraClient._token_estimate(None, "second call")
+
+        assert mock_get_encoding.call_count == 1
+        assert core._token_encoder_unavailable is True

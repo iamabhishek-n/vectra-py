@@ -175,8 +175,49 @@ class PostgresVectorStore(VectorStore):
         return results
 
     async def hybrid_search(self, text: str, vector: List[float], limit: int = 5, filter: Optional[Dict] = None) -> List[Dict[str, Any]]:
-        # Fallback to similarity search for now
-        return await self.similarity_search(vector, limit, filter)
+        # Real lexical + semantic fusion (RRF), mirroring PrismaVectorStore.hybrid_search
+        # since both talk to the same underlying Postgres full-text-search feature set.
+        semantic = await self.similarity_search(vector, limit * 2, filter)
+
+        params: List[Any] = [text]
+        where_clause = f"to_tsvector('simple', \"{self.c_content}\") @@ plainto_tsquery($1)"
+        if filter:
+            params.append(json.dumps(filter))
+            where_clause += f' AND "{self.c_meta}" @> ${len(params)}::jsonb'
+        params.append(limit * 2)
+        sql = f"""
+        SELECT "id", "{self.c_content}" as content, "{self.c_meta}" as metadata
+        FROM "{self.table_name}"
+        WHERE {where_clause}
+        LIMIT ${len(params)}
+        """
+
+        lexical: List[Dict[str, Any]] = []
+        try:
+            async with self._get_connection() as conn:
+                rows = await conn.fetch(sql, *params)
+            lexical = [{
+                'id': row['id'],
+                'content': row['content'],
+                'metadata': json.loads(row['metadata']) if isinstance(row['metadata'], str) else row['metadata'],
+                'score': 1.0,
+            } for row in rows]
+        except Exception:
+            lexical = []
+
+        combined: Dict[Any, Dict[str, Any]] = {}
+
+        def add(lst: List[Dict[str, Any]], weight: float = 1.0):
+            for idx, doc in enumerate(lst):
+                key = doc.get('id') or doc.get('content')
+                rrf_score = (1.0 / (60 + idx + 1)) * weight
+                if key not in combined:
+                    combined[key] = {**doc, 'score': 0.0}
+                combined[key]['score'] += rrf_score
+
+        add(semantic, 1.0)
+        add(lexical, 1.0)
+        return sorted(combined.values(), key=lambda d: d['score'], reverse=True)[:limit]
 
     async def delete_documents(self, filter: Dict[str, Any]) -> int:
         sql = f'DELETE FROM "{self.table_name}" WHERE "{self.c_meta}" @> $1::jsonb'
