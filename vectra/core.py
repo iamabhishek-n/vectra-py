@@ -214,7 +214,15 @@ class VectraClient:
             except Exception:
                 size = 0
                 mtime = 0
-            
+
+            # Use an explicit type/None check rather than `... or 52428800`: a deployer
+            # who sets max_file_size_bytes=0 to reject every file would otherwise have
+            # that 0 silently treated as falsy and replaced with the default.
+            configured_max = self.config.ingestion.max_file_size_bytes if self.config.ingestion else None
+            max_size = configured_max if isinstance(configured_max, int) else 52428800
+            if size > max_size:
+                raise ValueError(f"File exceeds maximum allowed size: {file_path} ({size} bytes > {max_size} bytes limit)")
+
             md5 = hashlib.md5()
             sha = hashlib.sha256()
             with open(file_path, 'rb') as f:

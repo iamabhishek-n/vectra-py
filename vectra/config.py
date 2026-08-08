@@ -35,6 +35,7 @@ class SessionType(str, Enum):
 class IngestionConfig(BaseModel):
     rate_limit_enabled: bool = False
     concurrency_limit: int = 5
+    max_file_size_bytes: int = 52428800
 
 class EmbeddingConfig(BaseModel):
     provider: ProviderType
