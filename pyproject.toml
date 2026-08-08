@@ -32,9 +32,15 @@ dependencies = [
     "pysbd"
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
 [project.urls]
 Homepage = "https://github.com/iamabhishek-n/vectra-py"
 Issues = "https://github.com/iamabhishek-n/vectra-py/issues"
 
 [project.scripts]
 vectra = "vectra.cli:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
