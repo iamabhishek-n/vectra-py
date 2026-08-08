@@ -343,7 +343,7 @@ class VectraClient:
 
         # Store
         if hasattr(self.vector_store, 'ensure_indexes'):
-            try: await self.vector_store.ensure_indexes()
+            try: await self.vector_store.ensure_indexes(self.config.embedding.dimensions or 1536)
             except Exception: pass
 
         if mode == "replace":

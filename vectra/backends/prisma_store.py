@@ -15,7 +15,7 @@ class PrismaVectorStore(VectorStore):
             raise ValueError(f"Unsafe SQL identifier: {v!r}")
         return v
     
-    async def ensure_indexes(self):
+    async def ensure_indexes(self, dimensions: int = 1536):
         client = self.config.client_instance
         table = self._safe_ident(self.config.table_name or "Document")
         c_vec = self._safe_ident(self.config.column_map.get('vector', 'embedding'))
@@ -53,7 +53,7 @@ class PrismaVectorStore(VectorStore):
                     alter_stmts.append(f'ADD COLUMN "{c_meta}" JSONB')
                 if c_vec not in existing_cols:
                     # Defaulting to 1536 if creating from scratch via raw SQL
-                    alter_stmts.append(f'ADD COLUMN "{c_vec}" vector(1536)')
+                    alter_stmts.append(f'ADD COLUMN "{c_vec}" vector({dimensions})')
                 if "createdAt" not in existing_cols:
                     alter_stmts.append('ADD COLUMN "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()')
                 
