@@ -25,6 +25,7 @@ from .backends.milvus_store import MilvusVectorStore
 from .backends.huggingface import HuggingFaceBackend
 from .reranker import get_reranker
 from .memory import InMemoryHistory, RedisHistory, PostgresHistory
+from .memory.fact_store import FactStore
 from .backends.ollama import OllamaBackend
 
 _token_encoder = None
@@ -124,7 +125,19 @@ class VectraClient:
                 self.history = None
         else:
             self.history = None
-        
+
+        facts_cfg = mem.get('facts') if mem else None
+        if facts_cfg and facts_cfg.get('enabled'):
+            fact_config = type("FactCfg", (), {
+                'client_instance': facts_cfg.get('client_instance'),
+                'table_name': facts_cfg.get('table_name', 'VectraFact'),
+                'llm': self.llm,
+                'embedder': self.embedder,
+            })()
+            self.fact_store = FactStore(fact_config)
+        else:
+            self.fact_store = None
+
         if config.retrieval and config.retrieval.llm_config:
             self.retrieval_llm = self._create_llm(config.retrieval.llm_config)
             
