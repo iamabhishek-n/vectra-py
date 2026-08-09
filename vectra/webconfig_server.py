@@ -1,12 +1,26 @@
+import hmac
 import json
 import os
+import secrets
 import threading
 import webbrowser
 import sqlite3
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .config import VectraConfig, ProviderType, ChunkingStrategy, RetrievalStrategy
 from .telemetry import telemetry
+
+
+def _safe_join(base_dir, requested_path):
+    """Resolves requested_path under base_dir, returning None if the
+    resolved path would escape base_dir (e.g. via ../ segments or an
+    absolute path). Guards every static-asset route against path traversal.
+    """
+    base_dir = os.path.abspath(base_dir)
+    target = os.path.abspath(os.path.join(base_dir, requested_path))
+    if target != base_dir and not target.startswith(base_dir + os.sep):
+        return None
+    return target
 
 def _get_db_connection(config_path):
     try:
@@ -83,15 +97,42 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _is_authorized(self):
+        token = self.headers.get("X-Vectra-Token")
+        if not token:
+            qs = parse_qs(urlparse(self.path).query)
+            token = qs.get("token", [None])[0]
+        if not token:
+            return False
+        return hmac.compare_digest(token, self.server.auth_token)
+
+    def _require_auth(self):
+        if self._is_authorized():
+            return True
+        self._send_json(401, {"error": "Unauthorized. Pass the token printed at startup via the X-Vectra-Token header."})
+        return False
+
     def _serve_static(self, path, content_type, folder='ui'):
+        # Resolve under the intended base directory only. `path` may come
+        # directly from the request URL (dashboard asset route) — decode
+        # percent-encoding first so `%2e%2e` can't slip past the traversal
+        # check as a literal, harmless-looking filename.
+        base_dir = os.path.join(os.path.dirname(__file__), folder)
+        file_path = _safe_join(base_dir, unquote(path))
+        if file_path is None:
+            self.send_error(403)
+            return
         try:
-            # Locate the ui directory relative to this file
-            base_dir = os.path.dirname(__file__)
-            file_path = os.path.join(base_dir, folder, path)
-            
-            with open(file_path, 'rb') as f:
-                data = f.read()
-                
+            if content_type.startswith("text/html"):
+                with open(file_path, "r", encoding="utf-8") as f:
+                    html = f.read()
+                token_script = f'<script>window.__VECTRA_TOKEN__={json.dumps(self.server.auth_token)};</script>'
+                html = html.replace("</head>", token_script + "</head>", 1) if "</head>" in html else token_script + html
+                data = html.encode("utf-8")
+            else:
+                with open(file_path, 'rb') as f:
+                    data = f.read()
+
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
@@ -126,7 +167,8 @@ class _Handler(BaseHTTPRequestHandler):
 
         # --- Observability API ---
         if p.path.startswith("/api/observability/"):
-            print(f"DEBUG: Handling observability request: {p.path}")
+            if not self._require_auth():
+                return
             conn = _get_db_connection(self.server.config_path)
             if not conn:
                 self._send_json(400, {"error": "Observability not enabled or DB not found"})
@@ -255,6 +297,8 @@ class _Handler(BaseHTTPRequestHandler):
             return
             
         if p.path == "/config":
+            if not self._require_auth():
+                return
             cfg_path = self.server.config_path
             if os.path.exists(cfg_path):
                 try:
@@ -273,6 +317,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         p = urlparse(self.path)
         if p.path == "/config":
+            if not self._require_auth():
+                return
             ln = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(ln) if ln > 0 else b"{}"
             try:
@@ -300,17 +346,20 @@ def start(config_path, mode='webconfig', host="127.0.0.1", port=8765, open_brows
                 raise Exception("No available ports found")
 
     server.config_path = os.path.abspath(config_path)
+    server.auth_token = secrets.token_hex(24)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
-    url = f"http://{host}:{port}/"
+    actual_port = server.server_address[1]
+    url = f"http://{host}:{actual_port}/"
     if mode == 'dashboard':
-        url = f"http://{host}:{port}/dashboard"
-    
+        url = f"http://{host}:{actual_port}/dashboard"
+
     # Try to init telemetry if not already (it's safe to call multiple times)
     telemetry.init()
     telemetry.track('feature_used', {'feature': mode})
 
     print(f"Vectra WebConfig running at {url}")
+    print(f"Auth token (send as X-Vectra-Token header for API calls): {server.auth_token}")
     if open_browser:
         try:
             webbrowser.open(url)
