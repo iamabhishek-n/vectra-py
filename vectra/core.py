@@ -26,6 +26,7 @@ from .backends.huggingface import HuggingFaceBackend
 from .reranker import get_reranker
 from .memory import InMemoryHistory, RedisHistory, PostgresHistory
 from .memory.fact_store import FactStore
+from .context_layer import build_context
 from .backends.ollama import OllamaBackend
 
 _token_encoder = None
@@ -137,6 +138,22 @@ class VectraClient:
             self.fact_store = FactStore(fact_config)
         else:
             self.fact_store = None
+
+        async def _context_ask(query: str, session_id: Optional[str] = None, tools: Optional[List[Dict]] = None) -> Dict[str, Any]:
+            check_guardrails(query, self.config.guardrails)
+            query_vector = await self.embedder.embed_query(query)
+            query, query_vector = await self._run_middlewares('on_before_retrieve', query, query_vector)
+            docs = await self.vector_store.similarity_search(query_vector, 5)
+            sources = [{"type": "docs", "items": [{"content": d["content"], "metadata": d.get("metadata", {})} for d in docs]}]
+            if session_id and self.fact_store:
+                sources.append({"type": "memory", "fact_store": self.fact_store, "session_id": session_id})
+            if tools:
+                sources.append({"type": "tools", "results": tools})
+            context_layer_cfg = getattr(self.config, 'context_layer', None) or {}
+            budget = context_layer_cfg.get('budget', {"max_tokens": 2048})
+            return await build_context({"query": query, "budget": budget, "sources": sources, "priority": context_layer_cfg.get('priority')})
+
+        self.context = type("ContextNamespace", (), {"ask": staticmethod(_context_ask)})()
 
         if config.retrieval and config.retrieval.llm_config:
             self.retrieval_llm = self._create_llm(config.retrieval.llm_config)
