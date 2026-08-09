@@ -1,5 +1,6 @@
 import json
 import re
+import time
 import uuid
 from typing import Any, Dict
 
@@ -19,6 +20,8 @@ class FactStore:
         self.table_name = assert_safe_identifier(getattr(config, 'table_name', 'VectraFact') or 'VectraFact', 'table_name')
         self.llm = getattr(config, 'llm', None)
         self.embedder = getattr(config, 'embedder', None)
+        self.cache_ttl_ms = getattr(config, 'cache_ttl_ms', 30000)
+        self._read_cache: Dict[str, Any] = {}
 
     def _get_connection(self):
         if hasattr(self.client, 'acquire'):
@@ -111,9 +114,22 @@ class FactStore:
                 except Exception:
                     pass
 
+        self._invalidate_session_cache(session_id)
+
+    def _invalidate_session_cache(self, session_id: str):
+        prefix = f"{session_id}:"
+        for key in [k for k in self._read_cache if k.startswith(prefix)]:
+            del self._read_cache[key]
+
     async def read(self, session_id: str, query: str, limit: int = 10):
         if not session_id or not self.embedder:
             return []
+
+        cache_key = f"{session_id}:{query}"
+        cached = self._read_cache.get(cache_key)
+        if cached and (time.time() * 1000 - cached['ts']) < self.cache_ttl_ms:
+            return cached['value']
+
         vector = await self.embedder.embed_query(query)
         vec = f"[{','.join(map(str, vector))}]"
         t = self.table_name
@@ -127,4 +143,6 @@ class FactStore:
                     LIMIT $3''',
                 session_id, vec, max(1, limit),
             )
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        self._read_cache[cache_key] = {'ts': time.time() * 1000, 'value': result}
+        return result
