@@ -49,3 +49,43 @@ def estimate_tokens_cached(text: Optional[str]) -> int:
 
 def _clear_token_cache():
     _token_cache.clear()
+
+
+async def build_context(input: Dict[str, Any]) -> Dict[str, Any]:
+    query = input.get("query")
+    budget = input.get("budget") or {}
+    sources = input.get("sources") or []
+    priority = input.get("priority")
+
+    max_tokens = budget.get("max_tokens", 2048)
+    parts: List[Dict[str, Any]] = []
+    dropped: List[Dict[str, Any]] = []
+    used = 0
+
+    if priority:
+        def rank(source):
+            t = source.get("type")
+            return priority.index(t) if t in priority else len(priority)
+        ordered_sources = sorted(sources, key=rank)
+    else:
+        ordered_sources = sources
+
+    for source in ordered_sources:
+        if source.get("type") == "docs":
+            for item in source.get("items", []):
+                content = item.get("content", "")
+                tokens = estimate_tokens_cached(content)
+                if used + tokens > max_tokens:
+                    dropped.append({"source": "docs", "metadata": item.get("metadata", {})})
+                    continue
+                parts.append({"source": "docs", "type": "docs", "content": content, "tokens": tokens})
+                used += tokens
+
+    return {
+        "parts": parts,
+        "text": "\n---\n".join(p["content"] for p in parts),
+        "tokens_used": used,
+        "tokens_budget": max_tokens,
+        "dropped": dropped,
+        "warnings": [],
+    }
