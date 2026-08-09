@@ -96,6 +96,16 @@ async def build_context(input: Dict[str, Any]) -> Dict[str, Any]:
                 parts.append({"source": "memory", "type": "memory", "content": content, "tokens": tokens})
                 used += tokens
 
+        if source.get("type") == "tools":
+            for result_item in source.get("results", []):
+                content = f"Tool: {result_item['name']}\nResult: {result_item['output']}"
+                tokens = estimate_tokens_cached(content)
+                if used + tokens > max_tokens:
+                    dropped.append({"source": "tools", "name": result_item["name"]})
+                    continue
+                parts.append({"source": "tools", "type": "tools", "content": content, "tokens": tokens})
+                used += tokens
+
     return {
         "parts": parts,
         "text": "\n---\n".join(p["content"] for p in parts),
