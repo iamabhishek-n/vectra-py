@@ -402,6 +402,18 @@ if packed['warnings']:
 
 `packed['dropped']` and `packed['warnings']` are never silent. If a source ran out of budget or a store timed out, it shows up there instead of just vanishing.
 
+The default budget is 2048 tokens. Override it, and the order sources get packed in, through `context_layer` on your `VectraConfig`:
+
+```python
+config = VectraConfig(
+    # ...
+    context_layer={
+        'budget': {'max_tokens': 4000},
+        'priority': ['memory', 'docs', 'tools']  # packed in this order until the budget runs out
+    }
+)
+```
+
 ### Durable facts
 
 Alongside raw conversation history, Vectra can maintain a separate store of facts extracted from conversations, each with a validity window rather than a hard delete. When a new fact contradicts an old one, the old one is marked invalid at that point in time instead of being erased, so you can still answer "what did we believe last month."
