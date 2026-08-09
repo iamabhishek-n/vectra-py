@@ -110,3 +110,21 @@ class FactStore:
                     )
                 except Exception:
                     pass
+
+    async def read(self, session_id: str, query: str, limit: int = 10):
+        if not session_id or not self.embedder:
+            return []
+        vector = await self.embedder.embed_query(query)
+        vec = f"[{','.join(map(str, vector))}]"
+        t = self.table_name
+
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(
+                f'''SELECT "id","subject","predicate","object","valid_at","invalid_at"
+                    FROM "{t}"
+                    WHERE "session_id" = $1 AND "invalid_at" IS NULL
+                    ORDER BY "embedding" <=> $2
+                    LIMIT $3''',
+                session_id, vec, max(1, limit),
+            )
+        return [dict(r) for r in rows]
