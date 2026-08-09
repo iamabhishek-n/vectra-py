@@ -37,8 +37,31 @@ new version number.
   (`docs/BRANCH_PROTECTION_SETUP.md`).
 - `ruff` linting, wired into CI, against a narrow high-signal rule set
   (pyflakes + pycodestyle errors).
+- A context and memory layer: `client.context.ask`, a budget-aware packing
+  primitive (`build_context`) that fuses retrieved docs, durable facts, tool
+  output, and history into one prompt, reporting `dropped` and `warnings`
+  explicitly instead of silently truncating.
+- A bi-temporal fact store (`FactStore`, `memory['facts']` config): facts
+  extracted from conversations via LLM, with contradiction detection that
+  marks a superseded fact invalid at that point in time instead of deleting
+  it. Enable with `memory['facts']['enabled']`, then
+  `client.fact_store.write(...)` and `client.fact_store.read(...)`.
+- Multi-database fusion: a `docs` context source can take a `stores` list
+  instead of one vector store, fanning out concurrently with a per-store
+  timeout and fusing results with reciprocal rank fusion. A slow or failed
+  store produces a warning, not a failed call.
+- `context_layer['budget']` and `context_layer['priority']` config,
+  controlling `context.ask`'s token budget and source packing order.
+- Two new vector store backends: Pinecone (client-side hybrid search RRF
+  fallback; `list_documents`/`update_documents` raise `NotImplementedError`,
+  no native listing endpoint) and Weaviate (native hybrid search and native
+  filter-based listing, full CRUD support, no fallback needed).
 
 ### Fixed
+- `context_layer` config had no field declared on `VectraConfig`, so
+  Pydantic's default `extra='ignore'` silently dropped it. `context.ask`'s
+  budget and priority were always the hardcoded 2048-token default no matter
+  what a caller configured. Now declared and respected.
 - Telemetry now defaults to off and is opt-in only.
 - `Milvus` store: `delete_documents` now returns the real delete count;
   `update_documents` implemented for both Milvus and Postgres, merging
@@ -61,6 +84,12 @@ new version number.
 - README `pip install` command corrected to `vectra-rag-py`; README
   telemetry section corrected to reflect the opt-in default.
 - Untracked `.egg-info` build artifact; fixed a `.gitignore` typo.
+
+### Changed
+- README repositioned around two co-equal pillars, RAG and the context/memory
+  layer, instead of presenting the context layer as a subsection of a
+  RAG-first pitch. Vector store list, feature matrix, and config reference
+  updated for Pinecone and Weaviate.
 
 ## [1.0.0] - 2026-04-01
 ### Added
