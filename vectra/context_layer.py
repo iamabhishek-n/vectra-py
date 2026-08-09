@@ -81,6 +81,21 @@ async def build_context(input: Dict[str, Any]) -> Dict[str, Any]:
                 parts.append({"source": "docs", "type": "docs", "content": content, "tokens": tokens})
                 used += tokens
 
+        if source.get("type") == "memory":
+            fact_store = source.get("fact_store")
+            session_id = source.get("session_id")
+            if not fact_store or not session_id:
+                continue
+            facts = await fact_store.read(session_id, query) or []
+            for fact in facts:
+                content = f"{fact['subject']} {fact['predicate']} {fact['object']}"
+                tokens = estimate_tokens_cached(content)
+                if used + tokens > max_tokens:
+                    dropped.append({"source": "memory", "fact": fact})
+                    continue
+                parts.append({"source": "memory", "type": "memory", "content": content, "tokens": tokens})
+                used += tokens
+
     return {
         "parts": parts,
         "text": "\n---\n".join(p["content"] for p in parts),
