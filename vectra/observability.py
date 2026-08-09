@@ -2,7 +2,6 @@ import sqlite3
 import json
 import uuid
 import time
-import os
 import threading
 
 class SQLiteLogger:

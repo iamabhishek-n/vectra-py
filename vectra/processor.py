@@ -3,7 +3,7 @@ import json
 import asyncio
 import re
 import math
-from typing import List, Optional, Dict, Any
+from typing import List
 from concurrent.futures import ThreadPoolExecutor
 from .config import ChunkingConfig, ChunkingStrategy
 
@@ -149,8 +149,8 @@ class DocumentProcessor:
             lens = [len(p) for p in self._last_pages]
             cum = []
             acc = 0
-            for l in lens:
-                acc += l
+            for page_len in lens:
+                acc += page_len
                 cum.append(acc)
             tmp = []
             for (start, end) in positions:

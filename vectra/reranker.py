@@ -2,7 +2,7 @@ import re
 import json
 import os
 import aiohttp
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any
 from .config import RerankingConfig, RerankingProvider
 
 class LLMReranker:

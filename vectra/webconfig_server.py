@@ -224,7 +224,7 @@ class _Handler(BaseHTTPRequestHandler):
                         if d.get('metadata'):
                             try:
                                 d['metadata'] = json.loads(d['metadata'])
-                            except:
+                            except (TypeError, ValueError):
                                 d['metadata'] = {}
                         else:
                             d['metadata'] = {}

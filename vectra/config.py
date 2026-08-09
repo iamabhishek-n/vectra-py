@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional, Any, Dict, Union
+from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 class ProviderType(str, Enum):

@@ -1,5 +1,4 @@
 import os
-import asyncio
 from typing import List, AsyncGenerator
 from openai import AsyncOpenAI
 from ..config import EmbeddingConfig, LLMConfig

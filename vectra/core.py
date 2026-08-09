@@ -6,7 +6,6 @@ import hashlib
 import asyncio
 import os
 import uuid
-import time
 import tiktoken
 from collections import OrderedDict
 from .config import VectraConfig, ProviderType, ChunkingStrategy, RetrievalStrategy
@@ -213,7 +212,6 @@ class VectraClient:
             'ingestion_mode': mode
         })
 
-        all_documents = []
         all_chunks = []
         all_hashes = []
         all_metas = []
@@ -324,7 +322,6 @@ class VectraClient:
 
         # Prepare final documents
         documents = []
-        chunk_idx_overall = 0
         for info in file_info_list:
             start, end = info['chunk_range']
             for i in range(start, end):
@@ -966,7 +963,7 @@ Return JSON: {{"claims": [{{"claim": "...", "supported": true/false, "evidence":
                     p_res = await self.llm.generate(prec_prompt, "Return valid JSON.")
                     p_json = json.loads(re.search(r'\{.*\}', p_res, re.S).group(0))
                     precision_results.append(1.0 if p_json.get('relevant') else 0.0)
-                except: precision_results.append(0.0)
+                except Exception: precision_results.append(0.0)
             context_precision = sum(precision_results) / len(precision_results) if precision_results else 0.0
 
             # 3. Context Recall (GT facts in Context)
@@ -981,7 +978,7 @@ Return JSON: {{"claims": [{{"claim": "...", "supported": true/false, "evidence":
                     m_res = await self.llm.generate(prompt, "Return valid JSON.")
                     m_json = json.loads(re.search(r'\{.*\}', m_res, re.S).group(0))
                     metrics[key] = m_json.get('score', 0.0)
-                except: pass
+                except Exception: pass
 
             report.append({
                 'question': query,

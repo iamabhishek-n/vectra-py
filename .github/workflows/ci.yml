@@ -16,6 +16,7 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
       - run: pip install -e ".[dev]"
+      - run: ruff check .
       - run: pytest
       # PYSEC-2026-311 (chromadb) has no fix version available as of this writing.
       # Remove --ignore-vuln once chromadb ships a fix — check by running

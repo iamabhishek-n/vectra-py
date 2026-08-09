@@ -6,6 +6,7 @@
 ## Checklist
 
 - [ ] Tests added/updated and passing (`pytest`)
+- [ ] Lint passes (`ruff check .`)
 - [ ] Linked issue (if applicable)
 
 ## Related Issue

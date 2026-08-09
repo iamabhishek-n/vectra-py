@@ -84,6 +84,20 @@ pytest
 
 All new features and bug fixes should include corresponding test cases. Tests are essential for maintaining code quality and preventing regressions.
 
+## Linting
+
+We use **ruff** for linting. Run it with:
+
+```bash
+ruff check .
+```
+
+CI currently lints against a narrow, high-signal rule set (pyflakes `F` +
+pycodestyle errors `E`, with `E501` line-length ignored) rather than ruff's
+full default rule set — see the `[tool.ruff]` section in `pyproject.toml`.
+This scope may be widened over time as the codebase is brought into
+compliance with additional rules.
+
 ## Making a Pull Request
 
 1. **One logical change per PR** - Keep pull requests focused on a single feature, bug fix, or improvement.
@@ -94,6 +108,7 @@ All new features and bug fixes should include corresponding test cases. Tests ar
 
 4. **Ensure CI passes** - Your PR must pass all automated checks:
    - All tests must pass (`pytest`)
+   - Lint must pass (`ruff check .`)
 
    (Maintainers: see [Branch Protection Setup](docs/BRANCH_PROTECTION_SETUP.md)
    for the one-time manual step that makes these checks required before merging.)

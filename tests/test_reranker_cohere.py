@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import patch
 from vectra.reranker import CrossEncoderReranker
 from vectra.config import RerankingConfig, RerankingProvider

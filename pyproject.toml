@@ -34,7 +34,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pip-audit>=2.7"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pip-audit>=2.7", "ruff>=0.6"]
 
 [project.urls]
 Homepage = "https://github.com/iamabhishek-n/vectra-py"
@@ -45,3 +45,31 @@ vectra = "vectra.cli:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 120
+target-version = "py38"
+
+[tool.ruff.lint]
+# Narrow baseline for first-time lint adoption: pyflakes (F) + pycodestyle
+# errors (E) only. This is the highest-signal rule set (unused imports,
+# undefined names, syntax-adjacent issues) without pulling in the rest of
+# ruff's default rule set (e.g. import sorting, docstring/style rules) that
+# would immediately flag hundreds of pre-existing, unrelated style choices
+# across the codebase. The scope can be widened in a follow-up once the
+# codebase is clean against this baseline.
+select = ["E", "F"]
+ignore = [
+    "E501",  # line too long — handled loosely via line-length above; long
+             # lines already in the codebase (some 200+ chars) aren't worth
+             # a mass reformat in this task.
+    "E701",  # multiple statements on one line (colon) — this codebase
+             # consistently uses single-line `if cond: stmt` / `try: stmt`
+             # bodies as a deliberate compact style (52 pre-existing
+             # instances across 11 files, e.g. vectra/core.py,
+             # vectra/backends/*.py, vectra/webconfig_server.py). It's a
+             # style preference, not a correctness issue, so it's excluded
+             # rather than reformatted wholesale in this lint-adoption task.
+    "E702",  # multiple statements on one line (semicolon) — same rationale
+             # as E701; a handful of pre-existing instances alongside it.
+]

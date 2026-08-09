@@ -60,7 +60,7 @@ class TestQueryRagMMRShortCircuit:
         client.config.guardrails = None
 
         # Execute query
-        result = await client.query_rag("test query")
+        await client.query_rag("test query")
 
         # Assert embed_documents was NOT called since fetch_k <= k
         client.embedder.embed_documents.assert_not_called()
@@ -89,7 +89,7 @@ class TestQueryRagMMRShortCircuit:
         client.config.guardrails = None
 
         # Execute query
-        result = await client.query_rag("test query")
+        await client.query_rag("test query")
 
         # Assert embed_documents was NOT called since fetch_k <= k
         client.embedder.embed_documents.assert_not_called()
@@ -120,7 +120,7 @@ class TestQueryRagMMRShortCircuit:
         client.config.guardrails = None
 
         # Execute query
-        result = await client.query_rag("test query")
+        await client.query_rag("test query")
 
         # Assert embed_documents WAS called since fetch_k > k
         client.embedder.embed_documents.assert_called_once()
@@ -155,7 +155,7 @@ class TestQueryRagMMRShortCircuit:
         client.config.guardrails = None
 
         # Execute query
-        result = await client.query_rag("test query")
+        await client.query_rag("test query")
 
         # With default config (fetch_k=20, window_size=20), embed_documents should NOT be called
         client.embedder.embed_documents.assert_not_called()

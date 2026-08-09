@@ -1,5 +1,4 @@
 import os
-import asyncio
 from typing import List, AsyncGenerator
 import json
 import aiohttp
@@ -34,7 +33,7 @@ class HuggingFaceBackend:
                     for i in x: _flatten(i)
                 else:
                     try: flat.append(float(x))
-                    except: pass
+                    except (TypeError, ValueError): pass
             _flatten(vec)
             out.append(flat)
         return out
@@ -48,7 +47,7 @@ class HuggingFaceBackend:
                 for i in x: _flatten(i)
             else:
                 try: flat.append(float(x))
-                except: pass
+                except (TypeError, ValueError): pass
         _flatten(vec)
         return flat
 

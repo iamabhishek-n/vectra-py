@@ -1,5 +1,4 @@
 import os
-import asyncio
 from typing import AsyncGenerator
 from anthropic import AsyncAnthropic
 from ..config import LLMConfig

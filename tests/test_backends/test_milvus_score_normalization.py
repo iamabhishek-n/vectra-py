@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 from vectra.backends.milvus_store import MilvusVectorStore
 from vectra.core import VectraClient
