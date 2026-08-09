@@ -1,6 +1,8 @@
 # Vectra (Python)
 
-Vectra is a production-grade, provider-agnostic Python SDK for building retrieval-augmented generation systems. It's async-first from the ground up and handles the full pipeline from loading documents to streaming an answer back, built so you can swap out any piece (embedding provider, vector store, LLM, retrieval strategy) without rewriting application code.
+Vectra started as a RAG SDK. It still is one, but it has grown a second half: a context and memory layer that decides what a model actually sees on a given turn, and remembers what happened on the turns before that. Both halves are async-first, provider-agnostic, and built so you can swap out any piece (embedding provider, vector store, LLM, retrieval strategy) without rewriting application code.
+
+If you only need retrieval-augmented generation, use it as a RAG SDK and ignore section 7. If you're building an agent that needs to hold onto facts across sessions, or assemble a prompt from several sources under a hard token budget, that's the part this SDK was missing before and now has.
 
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/vectra-rag-py)
 ![GitHub Release](https://img.shields.io/github/v/release/iamabhishek-n/vectra-py)
@@ -19,8 +21,8 @@ If you find this project useful, consider supporting it:<br>
 * [4. Installation](#4-installation)
 * [5. Quick Start](#5-quick-start)
 * [6. Core Concepts](#6-core-concepts)
-* [7. Configuration Reference](#7-configuration-reference)
-* [8. Context and Memory Layer](#8-context-and-memory-layer)
+* [7. Context and Memory Layer](#7-context-and-memory-layer)
+* [8. Configuration Reference](#8-configuration-reference)
 * [9. Ingestion Pipeline](#9-ingestion-pipeline)
 * [10. Querying and Streaming](#10-querying-and-streaming)
 * [11. Conversation Memory](#11-conversation-memory)
@@ -55,13 +57,19 @@ Load -> Chunk -> Embed -> Store -> Retrieve -> Rerank -> Plan -> Ground -> Gener
 
 Every stage is explicit and every stage is async. There's no hidden default embedding model, no silent fallback vector store. If something isn't configured, Vectra tells you rather than guessing.
 
-### What's in the box
+### The RAG pipeline
 
 * A provider-agnostic embedding and generation layer (OpenAI, Gemini, Anthropic, Ollama, OpenRouter, HuggingFace)
 * Seven vector store backends, swappable via one config key
 * Retrieval strategies beyond naive cosine similarity: HyDE, multi-query expansion, hybrid RRF, MMR
-* A context and memory layer for assembling budget-aware prompts and carrying facts across sessions
 * A CLI with the same capabilities as the SDK, plus a local web UI for config and observability
+
+### The context and memory layer
+
+* `client.context.ask`: one call that retrieves, fuses and packs whatever a model needs to see, under an explicit token budget
+* Nothing gets dropped without telling you. If a source didn't fit or a store timed out, it's in the response, not silently gone
+* A bi-temporal fact store: durable facts extracted from conversations, where contradicting a fact marks the old one invalid instead of deleting it
+* Both pieces work standalone from the RAG pipeline, or alongside it
 
 ---
 
@@ -102,6 +110,13 @@ Every stage is explicit and every stage is async. There's no hidden default embe
 * Multi-query expansion
 * Hybrid semantic and lexical search, fused with reciprocal rank fusion
 * MMR diversification
+
+**Context and memory layer**
+
+* Budget-aware context packing across multiple source types: retrieved docs, durable facts, tool output, chat history
+* Explicit `dropped` and `warnings` on every response, never a silent truncation
+* Bi-temporal fact storage on pgvector: facts get a validity window instead of being overwritten or deleted
+* Configurable packing budget and source priority (`context_layer['budget']`, `context_layer['priority']`)
 
 ---
 
@@ -191,11 +206,76 @@ That's the whole setup for a working RAG pipeline. Everything past this point is
 
 **Query planning and grounding** control how retrieved context gets assembled into a prompt and how strictly the model has to stick to what it was given.
 
-**Conversation memory** persists chat history across turns. Section 8 covers a second, complementary kind of memory: durable facts extracted from conversations, not just the raw transcript.
+**Conversation memory** persists chat history across turns. Section 7 covers a second, complementary kind of memory: durable facts extracted from conversations, not just the raw transcript.
 
 ---
 
-## 7. Configuration Reference
+## 7. Context and Memory Layer
+
+Conversation memory (section 11) stores the raw back-and-forth. The context layer is a different thing: it's the primitive that assembles whatever a model needs to see, from whatever sources you have, packed into a token budget, with nothing dropped silently.
+
+The simplest entry point is `client.context.ask`, which runs guardrails and middleware the same way `query_rag` does, retrieves from your configured vector store, and packs the result:
+
+```python
+packed = await client.context.ask('what did we agree on for pricing?', session_id='user-42')
+
+print(packed['text'])            # the assembled context, ready to hand to an LLM
+print(packed['tokens_used'], packed['tokens_budget'])
+if packed['warnings']:
+    print(packed['warnings'])
+```
+
+`packed['dropped']` and `packed['warnings']` are never silent. If a source ran out of budget or a store timed out, it shows up there instead of just vanishing.
+
+The default budget is 2048 tokens. Override it, and the order sources get packed in, through `context_layer` on your `VectraConfig`:
+
+```python
+config = VectraConfig(
+    # ...
+    context_layer={
+        'budget': {'max_tokens': 4000},
+        'priority': ['memory', 'docs', 'tools']  # packed in this order until the budget runs out
+    }
+)
+```
+
+### Durable facts
+
+Alongside raw conversation history, Vectra can maintain a separate store of facts extracted from conversations, each with a validity window rather than a hard delete. When a new fact contradicts an old one, the old one is marked invalid at that point in time instead of being erased, so you can still answer "what did we believe last month."
+
+Turn this on by adding a `facts` block under `memory`, pointing at a Postgres-compatible client (the fact store uses pgvector under the hood):
+
+```python
+memory = {
+    'enabled': True,
+    'facts': {
+        'enabled': True,
+        'client_instance': facts_pool,
+        'table_name': 'VectraFact'
+    }
+}
+```
+
+Once enabled, `client.fact_store` is available directly on the client:
+
+```python
+await client.fact_store.ensure_indexes()  # run once, sets up the table and indexes
+
+await client.fact_store.write('user-42', {
+    'user_message': 'Our deploy target is Tokyo from now on.',
+    'assistant_message': 'Got it, defaulting to the Tokyo region.'
+})
+
+# context.ask automatically pulls relevant facts into the packed context
+# once a fact store is configured and a session_id is passed in.
+packed = await client.context.ask('where should this deploy?', session_id='user-42')
+```
+
+Writing facts isn't automatic. `query_rag` doesn't call `fact_store.write` for you, so if you want facts to persist you call it yourself after a turn completes, with whatever extraction trigger makes sense for your app.
+
+---
+
+## 8. Configuration Reference
 
 All configuration is validated with Pydantic at runtime, so a typo in a config key fails loudly at startup instead of silently doing nothing.
 
@@ -385,71 +465,6 @@ observability = {
 
 ---
 
-## 8. Context and Memory Layer
-
-Conversation memory (section 11) stores the raw back-and-forth. The context layer is a different thing: it's the primitive that assembles whatever a model needs to see, from whatever sources you have, packed into a token budget, with nothing dropped silently.
-
-The simplest entry point is `client.context.ask`, which runs guardrails and middleware the same way `query_rag` does, retrieves from your configured vector store, and packs the result:
-
-```python
-packed = await client.context.ask('what did we agree on for pricing?', session_id='user-42')
-
-print(packed['text'])            # the assembled context, ready to hand to an LLM
-print(packed['tokens_used'], packed['tokens_budget'])
-if packed['warnings']:
-    print(packed['warnings'])
-```
-
-`packed['dropped']` and `packed['warnings']` are never silent. If a source ran out of budget or a store timed out, it shows up there instead of just vanishing.
-
-The default budget is 2048 tokens. Override it, and the order sources get packed in, through `context_layer` on your `VectraConfig`:
-
-```python
-config = VectraConfig(
-    # ...
-    context_layer={
-        'budget': {'max_tokens': 4000},
-        'priority': ['memory', 'docs', 'tools']  # packed in this order until the budget runs out
-    }
-)
-```
-
-### Durable facts
-
-Alongside raw conversation history, Vectra can maintain a separate store of facts extracted from conversations, each with a validity window rather than a hard delete. When a new fact contradicts an old one, the old one is marked invalid at that point in time instead of being erased, so you can still answer "what did we believe last month."
-
-Turn this on by adding a `facts` block under `memory`, pointing at a Postgres-compatible client (the fact store uses pgvector under the hood):
-
-```python
-memory = {
-    'enabled': True,
-    'facts': {
-        'enabled': True,
-        'client_instance': facts_pool,
-        'table_name': 'VectraFact'
-    }
-}
-```
-
-Once enabled, `client.fact_store` is available directly on the client:
-
-```python
-await client.fact_store.ensure_indexes()  # run once, sets up the table and indexes
-
-await client.fact_store.write('user-42', {
-    'user_message': 'Our deploy target is Tokyo from now on.',
-    'assistant_message': 'Got it, defaulting to the Tokyo region.'
-})
-
-# context.ask automatically pulls relevant facts into the packed context
-# once a fact store is configured and a session_id is passed in.
-packed = await client.context.ask('where should this deploy?', session_id='user-42')
-```
-
-Writing facts isn't automatic. `query_rag` doesn't call `fact_store.write` for you, so if you want facts to persist you call it yourself after a turn completes, with whatever extraction trigger makes sense for your app.
-
----
-
 ## 9. Ingestion Pipeline
 
 ```python
@@ -476,7 +491,7 @@ async for chunk in stream:
 
 ## 11. Conversation Memory
 
-Pass a `session_id` to `query_rag` to carry history across turns. This is the raw transcript, separate from the fact store described in section 8.
+Pass a `session_id` to `query_rag` to carry history across turns. This is the raw transcript, separate from the fact store described in section 7.
 
 ---
 
