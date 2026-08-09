@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional
+import asyncio
 import tiktoken
 
 _token_encoder = None
@@ -51,6 +52,19 @@ def _clear_token_cache():
     _token_cache.clear()
 
 
+def _reciprocal_rank_fusion(result_lists, k=60):
+    scores = {}
+    content_map = {}
+    for lst in result_lists:
+        for rank, doc in enumerate(lst):
+            content = doc["content"]
+            if content not in content_map:
+                content_map[content] = doc
+            scores[content] = scores.get(content, 0) + 1 / (k + rank + 1)
+    ordered = sorted(scores.keys(), key=lambda c: scores[c], reverse=True)
+    return [content_map[c] for c in ordered]
+
+
 async def build_context(input: Dict[str, Any]) -> Dict[str, Any]:
     query = input.get("query")
     budget = input.get("budget") or {}
@@ -60,6 +74,7 @@ async def build_context(input: Dict[str, Any]) -> Dict[str, Any]:
     max_tokens = budget.get("max_tokens", 2048)
     parts: List[Dict[str, Any]] = []
     dropped: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = []
     used = 0
 
     if priority:
@@ -71,7 +86,39 @@ async def build_context(input: Dict[str, Any]) -> Dict[str, Any]:
         ordered_sources = sources
 
     for source in ordered_sources:
-        if source.get("type") == "docs":
+        if source.get("type") == "docs" and source.get("stores"):
+            stores = source["stores"]
+            vector = source.get("vector")
+            limit = source.get("limit", 5)
+            filt = source.get("filter")
+            strategy = source.get("strategy")
+            timeout_s = source.get("timeout_s", 5.0)
+
+            async def _call_one(store):
+                if strategy == "hybrid" and hasattr(store, "hybrid_search"):
+                    coro = store.hybrid_search(query, vector, limit, filt)
+                else:
+                    coro = store.similarity_search(vector, limit, filt)
+                return await asyncio.wait_for(coro, timeout=timeout_s)
+
+            results = await asyncio.gather(*[_call_one(s) for s in stores], return_exceptions=True)
+            successful_lists = []
+            for i, res in enumerate(results):
+                if isinstance(res, Exception):
+                    warnings.append({"store": i, "error": str(res)})
+                else:
+                    successful_lists.append(res)
+
+            fused = _reciprocal_rank_fusion(successful_lists)
+            for doc in fused:
+                content = doc.get("content", "")
+                tokens = estimate_tokens_cached(content)
+                if used + tokens > max_tokens:
+                    dropped.append({"source": "docs", "metadata": doc.get("metadata", {})})
+                    continue
+                parts.append({"source": "docs", "type": "docs", "content": content, "tokens": tokens})
+                used += tokens
+        elif source.get("type") == "docs":
             for item in source.get("items", []):
                 content = item.get("content", "")
                 tokens = estimate_tokens_cached(content)
@@ -122,5 +169,5 @@ async def build_context(input: Dict[str, Any]) -> Dict[str, Any]:
         "tokens_used": used,
         "tokens_budget": max_tokens,
         "dropped": dropped,
-        "warnings": [],
+        "warnings": warnings,
     }
