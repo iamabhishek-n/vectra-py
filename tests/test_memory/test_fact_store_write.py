@@ -8,6 +8,7 @@ class FakeConn:
     def __init__(self):
         self.inserted = []
         self.execute = AsyncMock(side_effect=self._record)
+        self.fetchrow = AsyncMock(return_value=None)  # no existing facts, always inserts fresh
 
     async def _record(self, q, *args):
         if "INSERT INTO" in q:

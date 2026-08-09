@@ -88,6 +88,20 @@ class FactStore:
         async with self._get_connection() as conn:
             for i, f in enumerate(facts):
                 vec = f"[{','.join(map(str, embeddings[i]))}]"
+
+                existing = await conn.fetchrow(
+                    f'SELECT "id","object" FROM "{t}" WHERE "session_id" = $1 AND "subject" = $2 AND "predicate" = $3 AND "invalid_at" IS NULL',
+                    session_id, f["subject"], f["predicate"],
+                )
+
+                if existing and existing["object"] == f["object"]:
+                    continue
+                if existing:
+                    try:
+                        await conn.execute(f'UPDATE "{t}" SET "invalid_at" = NOW() WHERE "id" = $1', existing["id"])
+                    except Exception:
+                        pass
+
                 fact_id = str(uuid.uuid4())
                 try:
                     await conn.execute(
