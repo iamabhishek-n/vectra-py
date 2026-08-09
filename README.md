@@ -1,6 +1,6 @@
 # Vectra (Python)
 
-**Vectra** is a **production-grade, provider-agnostic Python SDK** for building **end-to-end Retrieval-Augmented Generation (RAG)** systems. It is designed for teams that need **correctness, extensibility, async performance, and observability** across embeddings, vector databases, retrieval strategies, and LLM providers.
+Vectra is a production-grade, provider-agnostic Python SDK for building retrieval-augmented generation systems. It's async-first from the ground up and handles the full pipeline from loading documents to streaming an answer back, built so you can swap out any piece (embedding provider, vector store, LLM, retrieval strategy) without rewriting application code.
 
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/vectra-rag-py)
 ![GitHub Release](https://img.shields.io/github/v/release/iamabhishek-n/vectra-py)
@@ -11,120 +11,101 @@ If you find this project useful, consider supporting it:<br>
 [![Sponsor me on GitHub](https://img.shields.io/badge/Sponsor%20me%20on-GitHub-%23FFD43B?logo=github)](https://github.com/sponsors/iamabhishek-n)
 [![Buy me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20Coffee-%23FFDD00?logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/iamabhishekn)
 
-
 ## Table of Contents
 
 * [1. Overview](#1-overview)
-* [2. Design Goals & Philosophy](#2-design-goals--philosophy)
+* [2. Design Goals](#2-design-goals)
 * [3. Feature Matrix](#3-feature-matrix)
 * [4. Installation](#4-installation)
 * [5. Quick Start](#5-quick-start)
 * [6. Core Concepts](#6-core-concepts)
-  * [Providers](#providers)
-  * [Vector Stores](#vector-stores)
-  * [Chunking](#chunking)
-  * [Retrieval](#retrieval)
-  * [Reranking](#reranking)
-  * [Metadata Enrichment](#metadata-enrichment)
-  * [Query Planning & Grounding](#query-planning--grounding)
-  * [Conversation Memory](#conversation-memory)
-* [7. Configuration Reference (Usage-Driven)](#7-configuration-reference-usage-driven)
-* [8. Ingestion Pipeline](#8-ingestion-pipeline)
-* [9. Querying & Streaming](#9-querying--streaming)
-* [10. Conversation Memory](#10-conversation-memory)
-* [11. Evaluation & Quality Measurement](#11-evaluation--quality-measurement)
-* [12. CLI](#12-cli)
-  * [Ingest & Query](#ingest--query)
-  * [WebConfig (Config Generator UI)](#webconfig-config-generator-ui)
-  * [Observability Dashboard](#observability-dashboard)
-* [13. Observability & Callbacks](#13-observability--callbacks)
-* [14. Telemetry](#14-telemetry)
-* [15. Guardrails](#15-guardrails)
-* [16. Database Schemas & Indexing](#16-database-schemas--indexing)
-* [17. Extending Vectra](#17-extending-vectra)
-* [18. Architecture Overview](#18-architecture-overview)
-* [19. Development & Contribution Guide](#19-development--contribution-guide)
-* [20. Production Best Practices](#20-production-best-practices)
+* [7. Configuration Reference](#7-configuration-reference)
+* [8. Context and Memory Layer](#8-context-and-memory-layer)
+* [9. Ingestion Pipeline](#9-ingestion-pipeline)
+* [10. Querying and Streaming](#10-querying-and-streaming)
+* [11. Conversation Memory](#11-conversation-memory)
+* [12. Evaluation](#12-evaluation)
+* [13. CLI](#13-cli)
+* [14. Observability and Callbacks](#14-observability-and-callbacks)
+* [15. Telemetry](#15-telemetry)
+* [16. Guardrails](#16-guardrails)
+* [17. Database Schema](#17-database-schema)
+* [18. Extending Vectra](#18-extending-vectra)
+* [19. Architecture](#19-architecture)
+* [20. Development](#20-development)
+* [21. Production Notes](#21-production-notes)
 
 ---
 
 ## 1. Overview
 
-Vectra implements a **fully modular RAG pipeline**:
+The pipeline looks like this:
 
 ```
-Load → Chunk → Embed → Store → Retrieve → Rerank → Plan → Ground → Generate → Stream
+Load -> Chunk -> Embed -> Store -> Retrieve -> Rerank -> Plan -> Ground -> Generate -> Stream
 ```
+
 <p align="center">
   <img src="https://vectra.thenxtgenagents.com/vectraArch.png" alt="Vectra SDK Architecture" width="900">
 </p>
 
 <p align="center">
-  <em>Vectra SDK – End-to-End RAG Architecture</em>
+  <em>Vectra SDK, end to end RAG architecture</em>
 </p>
 
-All stages are **explicitly configured**, **async-first**, and **observable**.
+Every stage is explicit and every stage is async. There's no hidden default embedding model, no silent fallback vector store. If something isn't configured, Vectra tells you rather than guessing.
 
-### Key Characteristics
+### What's in the box
 
-* Async-first API (`asyncio`)
-* Provider-agnostic embeddings & LLMs
-* Multiple vector backends (Postgres, Chroma, Qdrant, Milvus)
-* Advanced retrieval (HyDE, Multi-Query, Hybrid RRF, MMR)
-* Unified streaming interface
-* Built-in evaluation and observability
-* CLI + SDK parity
+* A provider-agnostic embedding and generation layer (OpenAI, Gemini, Anthropic, Ollama, OpenRouter, HuggingFace)
+* Seven vector store backends, swappable via one config key
+* Retrieval strategies beyond naive cosine similarity: HyDE, multi-query expansion, hybrid RRF, MMR
+* A context and memory layer for assembling budget-aware prompts and carrying facts across sessions
+* A CLI with the same capabilities as the SDK, plus a local web UI for config and observability
 
 ---
 
-## 2. Design Goals & Philosophy
+## 2. Design Goals
 
-### Explicitness over Magic
+**Explicit over implicit.** Chunking, retrieval, grounding and memory behavior are all things you configure on purpose. Vectra won't quietly pick a strategy for you.
 
-Vectra avoids hidden defaults. Chunking, retrieval, grounding, memory, and generation behavior are always explicit and validated.
+**Production-first.** Rate limiting, embedding caching, index helpers, observability and evaluation aren't add-ons bolted on later. They're part of the core design.
 
-### Production-First
+**No vendor lock-in.** Moving from OpenAI to Gemini, or from Postgres to Qdrant, is a config change. Your ingestion and query code doesn't move.
 
-Index helpers, rate limiting, embedding cache, observability, and evaluation are first-class features.
-
-### Provider Neutrality
-
-Switching providers (OpenAI ↔ Gemini ↔ Anthropic ↔ Ollama) requires **no application code changes**.
-
-### Extensibility
-
-All major subsystems are interface-driven and designed to be extended safely.
+**Interfaces you can extend.** Providers, vector stores and middleware are all built against small abstract base classes. Writing your own backend is a matter of implementing a handful of methods, not fighting the framework.
 
 ---
 
 ## 3. Feature Matrix
 
-### Providers
+**Providers**
 
-* **Embeddings**: OpenAI, Gemini, Ollama, HuggingFace
-* **Generation**: OpenAI, Gemini, Anthropic, Ollama, OpenRouter, HuggingFace
-* **Streaming**: Async generators with normalized output
+* Embeddings: OpenAI, Gemini, Ollama, HuggingFace
+* Generation: OpenAI, Gemini, Anthropic, Ollama, OpenRouter, HuggingFace
+* Streaming: async generators, normalized output across providers
 
-### Vector Stores
+**Vector stores**
 
-* PostgreSQL (Prisma + pgvector)
+* PostgreSQL via Prisma and pgvector
+* PostgreSQL via native `asyncpg`
 * ChromaDB
 * Qdrant
 * Milvus
+* Pinecone
+* Weaviate (native hybrid search and filter-based listing, not the client-side fallback the others use)
 
-### Retrieval Strategies
+**Retrieval strategies**
 
 * Naive cosine similarity
-* HyDE (Hypothetical Document Embeddings)
-* Multi-Query expansion (RRF)
-* Hybrid semantic + lexical (RRF)
+* HyDE (hypothetical document embeddings)
+* Multi-query expansion
+* Hybrid semantic and lexical search, fused with reciprocal rank fusion
 * MMR diversification
 
 ---
 
 ## 4. Installation
-
-### Library
 
 ```bash
 pip install vectra-rag-py
@@ -132,38 +113,34 @@ pip install vectra-rag-py
 uv pip install vectra-rag-py
 ```
 
-### Backends
+Install the client for whichever backend you're using. Vectra doesn't bundle these, since most projects only need one or two.
 
 ```bash
-# Prisma Client Python – https://prisma.brendonovich.dev
-pip install prisma-client-py
-# ChromaDB – https://docs.trychroma.com
-pip install chromadb
-# Qdrant Python Client – https://qdrant.tech/documentation
-pip install qdrant-client
-# Milvus Python SDK – https://milvus.io/docs
-pip install pymilvus
+pip install asyncpg           # native Postgres
+pip install prisma-client-py  # Prisma + pgvector, https://prisma.brendonovich.dev
+pip install chromadb          # ChromaDB, https://docs.trychroma.com
+pip install qdrant-client     # Qdrant, https://qdrant.tech/documentation
+pip install pymilvus          # Milvus, https://milvus.io/docs
+pip install pinecone          # Pinecone, https://docs.pinecone.io/
+pip install weaviate-client   # Weaviate, https://weaviate.io/developers/weaviate
 ```
 
-
-### CLI
+CLI:
 
 ```bash
 vectra --help
-# alternative
+# or, if the entry point isn't on your PATH
 python -m vectra.cli --help
 ```
 
-### Requirements
-
-Vectra depends on:
-`pydantic`, `asyncio`, `prisma-client-py`, `chromadb`, `openai`, `google-generativeai`, `anthropic`, `pypdf`, `mammoth`, `openpyxl`
+Core dependencies: `pydantic`, `openai`, `google-generativeai`, `anthropic`, `pypdf`, `mammoth`, `openpyxl`.
 
 ---
 
 ## 5. Quick Start
 
 ```python
+import os
 import asyncpg
 from vectra import VectraClient, VectraConfig, ProviderType
 
@@ -184,7 +161,7 @@ config = VectraConfig(
         'type': 'postgres',
         'client_instance': pool,
         'table_name': 'document',
-        'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'vector' }
+        'column_map': {'content': 'content', 'metadata': 'metadata', 'vector': 'vector'}
     }
 )
 
@@ -194,396 +171,392 @@ result = await client.query_rag('What is the vacation policy?')
 print(result['answer'])
 ```
 
+That's the whole setup for a working RAG pipeline. Everything past this point is about tuning it.
+
 ---
 
 ## 6. Core Concepts
 
-### Providers
+**Providers** implement embeddings, generation, or both. Vectra normalizes the response shape and the streaming interface so switching providers doesn't touch your call sites.
 
-Providers implement embeddings, generation, or both. Vectra normalizes responses and streaming across providers.
+**Vector stores** persist embeddings and metadata. They're swappable through config, and every backend implements the same interface (add, search, hybrid search, list, delete, update, file-exists check).
 
-### Vector Stores
+**Chunking** has two strategies: recursive, token-aware splitting for most content, and agentic LLM-driven splitting for documents where semantic boundaries matter more than character counts (contracts, policies, anything dense).
 
-Vector stores persist embeddings and metadata. Backends are swappable via configuration.
+**Retrieval** is where you trade recall for precision. Hybrid is the sane default for production workloads; the others exist for cases where you know your query distribution well enough to hand-tune.
 
-### Chunking
+**Reranking** is an optional second pass that reorders candidate chunks with an LLM before they're used.
 
-* **Recursive**: Token-aware, separator-aware splitting
-* **Agentic**: LLM-driven semantic propositions
+**Metadata enrichment** generates summaries, keywords and hypothetical questions per chunk during ingestion, which improves retrieval quality at the cost of a slower ingest.
 
-### Retrieval
+**Query planning and grounding** control how retrieved context gets assembled into a prompt and how strictly the model has to stick to what it was given.
 
-Configurable strategies to balance recall, precision, and latency.
-
-### Reranking
-
-Optional LLM-based reordering of candidate chunks.
-
-### Metadata Enrichment
-
-Optional per-chunk summaries, keywords, and hypothetical questions generated during ingestion.
-
-### Query Planning & Grounding
-
-Controls context assembly and factual grounding constraints.
-
-### Conversation Memory
-
-Persist multi-turn chat history across sessions.
+**Conversation memory** persists chat history across turns. Section 8 covers a second, complementary kind of memory: durable facts extracted from conversations, not just the raw transcript.
 
 ---
 
-## 7. Configuration Reference (Usage-Driven)
+## 7. Configuration Reference
 
-> All configuration is validated using **Pydantic** at runtime.
+All configuration is validated with Pydantic at runtime, so a typo in a config key fails loudly at startup instead of silently doing nothing.
 
 ### Embedding
 
 ```python
-embedding={
-  'provider': ProviderType.OPENAI,
-  'api_key': os.getenv('OPENAI_API_KEY'),
-  'model_name': 'text-embedding-3-small',
-  'dimensions': 1536
+embedding = {
+    'provider': ProviderType.OPENAI,
+    'api_key': os.getenv('OPENAI_API_KEY'),
+    'model_name': 'text-embedding-3-small',
+    'dimensions': 1536
 }
 ```
 
-Use `dimensions` when using pgvector to avoid runtime mismatches.
-
----
+Set `dimensions` explicitly when using pgvector. The column is created with a fixed dimension, and a mismatch fails at query time rather than at startup.
 
 ### LLM
 
 ```python
-llm={
-  'provider': ProviderType.GEMINI,
-  'api_key': os.getenv('GOOGLE_API_KEY'),
-  'model_name': 'gemini-2.5-flash',
-  'temperature': 0.3,
-  'max_tokens': 1024
+llm = {
+    'provider': ProviderType.GEMINI,
+    'api_key': os.getenv('GOOGLE_API_KEY'),
+    'model_name': 'gemini-2.5-flash',
+    'temperature': 0.3,
+    'max_tokens': 1024
 }
 ```
 
-Used for generation
-
----
+This model is used for answer generation, HyDE, multi-query expansion, agentic chunking and reranking, unless you override any of those with their own `llm_config`.
 
 ### Database
 
-Supports Prisma, Chroma, Qdrant, Milvus.
-
 ```python
-# PostgreSQL (native asyncpg)
-database={
-  'type': 'postgres',
-  'client_instance': pg_pool,  # asyncpg.Pool or Connection
-  'table_name': 'document',
-  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'vector' }
+# Native Postgres (asyncpg)
+database = {
+    'type': 'postgres',
+    'client_instance': pg_pool,
+    'table_name': 'document',
+    'column_map': {'content': 'content', 'metadata': 'metadata', 'vector': 'vector'}
 }
 ```
 
 ```python
-# Prisma (Postgres via prisma-client-py)
-database={
-  'type': 'prisma',
-  'client_instance': prisma,
-  'table_name': 'Document',
-  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'embedding' }
+# Prisma
+database = {
+    'type': 'prisma',
+    'client_instance': prisma,
+    'table_name': 'Document',
+    'column_map': {'content': 'content', 'metadata': 'metadata', 'vector': 'embedding'}
 }
 ```
 
 ```python
 # ChromaDB
-database={
-  'type': 'chroma',
-  'client_instance': chroma_client,  # chromadb.Client or PersistentClient
-  'table_name': 'rag_collection',
-  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'embedding' }
+database = {
+    'type': 'chroma',
+    'client_instance': chroma_client,
+    'table_name': 'rag_collection'
 }
 ```
 
 ```python
 # Qdrant
-database={
-  'type': 'qdrant',
-  'client_instance': qdrant_client,  # qdrant_client.QdrantClient
-  'table_name': 'rag_collection',
-  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'embedding' }
+database = {
+    'type': 'qdrant',
+    'client_instance': qdrant_client,
+    'table_name': 'rag_collection'
 }
 ```
 
 ```python
 # Milvus
-database={
-  'type': 'milvus',
-  'client_instance': milvus_client,  # pymilvus client
-  'table_name': 'rag_collection',
-  'column_map': { 'content': 'content', 'metadata': 'metadata', 'vector': 'embedding' }
+database = {
+    'type': 'milvus',
+    'client_instance': milvus_client,
+    'table_name': 'rag_collection',
+    'metric_type': 'COSINE'  # or 'IP', 'L2', matching how the collection was created
 }
 ```
 
----
+```python
+# Pinecone
+database = {
+    'type': 'pinecone',
+    'client_instance': pinecone_index,  # an Index handle from the Pinecone client
+    'table_name': 'my-namespace'        # optional, maps to a Pinecone namespace
+}
+```
+
+Pinecone has no listing or scroll endpoint. On this backend, `list_documents` and `update_documents` raise `NotImplementedError` rather than pretending to support them, and `delete_documents` returns `-1` since Pinecone can't report a count for a filtered delete.
+
+```python
+# Weaviate
+database = {
+    'type': 'weaviate',
+    'client_instance': weaviate_client,  # a v3 collections-API client
+    'table_name': 'Document'             # the collection name
+}
+```
+
+Weaviate supports hybrid search and filtered listing natively, so `list_documents`, `update_documents` and `delete_documents` all work with real results here, unlike on Pinecone.
 
 ### Chunking
 
 ```python
-chunking={
-  'strategy': ChunkingStrategy.RECURSIVE,
-  'chunk_size': 1000,
-  'chunk_overlap': 200
+chunking = {
+    'strategy': ChunkingStrategy.RECURSIVE,
+    'chunk_size': 1000,
+    'chunk_overlap': 200
 }
 ```
-
-Agentic:
 
 ```python
-chunking={
-  'strategy': ChunkingStrategy.AGENTIC,
-  'agentic_llm': {
-    'provider': ProviderType.OPENAI,
-    'api_key': os.getenv('OPENAI_API_KEY'),
-    'model_name': 'gpt-4o-mini'
-  }
+# Agentic
+chunking = {
+    'strategy': ChunkingStrategy.AGENTIC,
+    'agentic_llm': {
+        'provider': ProviderType.OPENAI,
+        'api_key': os.getenv('OPENAI_API_KEY'),
+        'model_name': 'gpt-4o-mini'
+    }
 }
 ```
-
----
 
 ### Retrieval
 
 ```python
-retrieval={ 'strategy': RetrievalStrategy.HYBRID }
+retrieval = {'strategy': RetrievalStrategy.HYBRID}
 ```
-
-Hybrid is recommended for production workloads.
-
----
 
 ### Reranking
 
 ```python
-reranking={
-  'enabled': True,
-  'window_size': 20,
-  'top_n': 5
+reranking = {
+    'enabled': True,
+    'window_size': 20,
+    'top_n': 5
 }
 ```
 
----
-
-### Memory
+### Conversation memory
 
 ```python
-memory={ 'enabled': True, 'type': 'in-memory', 'max_messages': 20 }
+memory = {'enabled': True, 'type': 'in-memory', 'max_messages': 20}
 ```
-
-Redis and Postgres are supported.
 
 ```python
 # Redis
-memory={
-  'enabled': True,
-  'type': 'redis',
-  'max_messages': 20,
-  'redis': {
-    'client_instance': redis_client,
-    'key_prefix': 'vectra:chat:'
-  }
+memory = {
+    'enabled': True,
+    'type': 'redis',
+    'max_messages': 20,
+    'redis': {
+        'client_instance': redis_client,
+        'key_prefix': 'vectra:chat:'
+    }
 }
 ```
 
 ```python
 # Postgres
-memory={
-  'enabled': True,
-  'type': 'postgres',
-  'max_messages': 20,
-  'postgres': {
-    'client_instance': pg_pool,  # asyncpg.Pool or Connection
-    'table_name': 'ChatMessage',
-    'column_map': {
-      'sessionId': 'sessionId',
-      'role': 'role',
-      'content': 'content',
-      'createdAt': 'createdAt'
+memory = {
+    'enabled': True,
+    'type': 'postgres',
+    'max_messages': 20,
+    'postgres': {
+        'client_instance': pg_pool,
+        'table_name': 'ChatMessage',
+        'column_map': {
+            'sessionId': 'sessionId',
+            'role': 'role',
+            'content': 'content',
+            'createdAt': 'createdAt'
+        }
     }
-  }
 }
 ```
-
----
 
 ### Observability
 
 ```python
-observability={
-  'enabled': True,
-  'sqlite_path': 'vectra-observability.db'
+observability = {
+    'enabled': True,
+    'sqlite_path': 'vectra-observability.db'
 }
 ```
 
 ---
 
-## 8. Ingestion Pipeline
+## 8. Context and Memory Layer
+
+Conversation memory (section 11) stores the raw back-and-forth. The context layer is a different thing: it's the primitive that assembles whatever a model needs to see, from whatever sources you have, packed into a token budget, with nothing dropped silently.
+
+The simplest entry point is `client.context.ask`, which runs guardrails and middleware the same way `query_rag` does, retrieves from your configured vector store, and packs the result:
+
+```python
+packed = await client.context.ask('what did we agree on for pricing?', session_id='user-42')
+
+print(packed['text'])            # the assembled context, ready to hand to an LLM
+print(packed['tokens_used'], packed['tokens_budget'])
+if packed['warnings']:
+    print(packed['warnings'])
+```
+
+`packed['dropped']` and `packed['warnings']` are never silent. If a source ran out of budget or a store timed out, it shows up there instead of just vanishing.
+
+### Durable facts
+
+Alongside raw conversation history, Vectra can maintain a separate store of facts extracted from conversations, each with a validity window rather than a hard delete. When a new fact contradicts an old one, the old one is marked invalid at that point in time instead of being erased, so you can still answer "what did we believe last month."
+
+Turn this on by adding a `facts` block under `memory`, pointing at a Postgres-compatible client (the fact store uses pgvector under the hood):
+
+```python
+memory = {
+    'enabled': True,
+    'facts': {
+        'enabled': True,
+        'client_instance': facts_pool,
+        'table_name': 'VectraFact'
+    }
+}
+```
+
+Once enabled, `client.fact_store` is available directly on the client:
+
+```python
+await client.fact_store.ensure_indexes()  # run once, sets up the table and indexes
+
+await client.fact_store.write('user-42', {
+    'user_message': 'Our deploy target is Tokyo from now on.',
+    'assistant_message': 'Got it, defaulting to the Tokyo region.'
+})
+
+# context.ask automatically pulls relevant facts into the packed context
+# once a fact store is configured and a session_id is passed in.
+packed = await client.context.ask('where should this deploy?', session_id='user-42')
+```
+
+Writing facts isn't automatic. `query_rag` doesn't call `fact_store.write` for you, so if you want facts to persist you call it yourself after a turn completes, with whatever extraction trigger makes sense for your app.
+
+---
+
+## 9. Ingestion Pipeline
 
 ```python
 await client.ingest_documents('./documents')
 ```
 
-* Files or directories supported
-* Recursive traversal
-* Embedding cache via SHA256
-* Optional rate limiting
-
-Supported formats: PDF, DOCX, XLSX, TXT, Markdown
+Works on a single file or a directory, walked recursively, with an embedding cache keyed by content hash and optional rate limiting on the embedding calls. Supported formats: PDF, DOCX, XLSX, TXT, Markdown.
 
 ---
 
-## 9. Querying & Streaming
-
-Standard:
+## 10. Querying and Streaming
 
 ```python
-res = await client.query_rag('Refund policy?')
+result = await client.query_rag('Refund policy?')
 ```
 
-Streaming:
-
 ```python
-stream = await client.query_rag('Draft email', stream=True)
+stream = await client.query_rag('Draft an email', stream=True)
 async for chunk in stream:
     print(chunk.get('delta', ''), end='')
 ```
 
 ---
 
-## 10. Conversation Memory
+## 11. Conversation Memory
 
-Pass a `session_id` to preserve multi-turn context.
+Pass a `session_id` to `query_rag` to carry history across turns. This is the raw transcript, separate from the fact store described in section 8.
 
 ---
 
-## 11. Evaluation & Quality Measurement
+## 12. Evaluation
 
 ```python
 await client.evaluate([
-  { 'question': 'Capital of France?', 'expected_ground_truth': 'Paris' }
+    {'question': 'Capital of France?', 'expected_ground_truth': 'Paris'}
 ])
 ```
 
-Metrics: Faithfulness, Relevance
+Reports faithfulness and relevance scores against your ground truth set.
 
 ---
 
-## 12. CLI
-
-### Ingest & Query
+## 13. CLI
 
 ```bash
 vectra ingest ./docs --config=./config.json
 vectra query "What are the payment terms?" --config=./config.json --stream
 ```
 
----
-
-### WebConfig (Config Generator UI)
+**WebConfig** is a local UI for building and validating a `vectra.config.json` without hand-writing it.
 
 ```bash
 vectra webconfig
 ```
 
-Launches a local web UI to interactively generate and validate `vectra.config.json`.
-
----
-
-### Observability Dashboard
+**Dashboard** is a local, SQLite-backed UI showing ingestion latency, query latency, retrieval and generation traces, and chat sessions.
 
 ```bash
 vectra dashboard
 ```
 
-Launches a local dashboard for metrics, traces, and session analysis.
+---
+
+## 14. Observability and Callbacks
+
+Enabling `observability` records metrics, traces and sessions automatically. Callbacks give you hooks into ingestion, retrieval, reranking and generation, if you want to wire your own logging or metrics on top.
 
 ---
 
-## 13. Observability & Callbacks
+## 15. Telemetry
 
-Tracks metrics, traces, and chat sessions when enabled.
+Vectra collects anonymous usage data to help prioritize features and catch broken releases. It's off by default.
 
-Callbacks allow hooking into ingestion, retrieval, reranking, and generation stages.
- 
- ---
- 
- ## 14. Telemetry
- 
- Vectra collects anonymous usage data to help us improve the SDK, prioritize features, and detect broken versions.
- 
- ### What we track
- * **Identity**: A random UUID (`distinct_id`) stored locally in `~/.vectra/telemetry.json`. **No PII, emails, IPs, or hostnames.**
- * **Events**:
-     * `sdk_initialized`: Config shape (providers used), OS/Runtime version, session type (api/cli/chat).
-     * `ingest_batch_started`: File count, ingestion mode.
-     * `ingest_batch_completed`: File count, chunk count, duration in milliseconds.
-     * `query_executed`: Retrieval strategy, query mode (rag), reranking enabled, streaming, memory used, result count. No latency is currently tracked on this event.
-     * `feature_used`: WebConfig/Dashboard usage.
-     * `evaluation_run`: Dataset size bucket.
-     * `error_occurred`: Error type and stage (no stack traces).
-     * `cli_command_used`: Command name and flags.
- 
- ### Why we track it
- * **Detect broken versions**: Spikes in `error_occurred` help us find bugs.
- * **Measure adoption**: Helps us understand which providers (OpenAI vs Gemini) and vector stores are most popular.
- * **Drop support safely**: We can see if anyone is still using Python 3.8 before dropping it.
- 
- ### How to opt-in
- Telemetry is **disabled by default**. To enable it:
- 
- **Config**
- ```python
- client = VectraClient(
-     VectraConfig(
-         # ...
-         telemetry={'enabled': True}
-     )
- )
- ```
- 
- ### Force-disable (even if opted in)
- Set `VECTRA_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1` as an environment variable. These always win over the config setting.
- 
- ---
- 
- ## 15. Guardrails
- 
- As of this version, `query_rag` enforces basic guardrails by default:
- 
- - **`max_query_length`** (default: 2000 characters) — queries longer than this are rejected before any embedding or LLM call.
- - **`block_pii`** (default: off) — when enabled, rejects queries containing an apparent email address, phone number, SSN-shaped number, or long digit run.
- - **`content_filter`** (default: off) — when enabled, rejects queries matching a built-in list of clearly harmful phrases, extendable via `blocked_terms`.
- 
- Document ingestion also enforces a file-size limit by default:
- 
- - **`ingestion.max_file_size_bytes`** (default: 52428800 = 50MB) — files larger than this are rejected before being read.
- 
- ### Upgrading from an earlier version
- 
- The 2000-character query limit and 50MB file-size limit are new as of this release and are enforced even if you don't set a `guardrails` or `ingestion` block in your config — they were previously present in the config schema but not enforced. To raise or effectively disable a limit, set it explicitly:
- 
- ```python
- config = VectraConfig(
-     # ... other config ...
-     guardrails={'max_query_length': 10000},
-     ingestion={'max_file_size_bytes': 200 * 1024 * 1024},  # 200MB
- )
- 
- client = VectraClient(config)
- ```
- 
- See `vectra/guardrails.py` for the exact PII/content-filter detection logic.
- 
- ---
- 
- ## 16. Database Schemas & Indexing
+What's tracked: a random UUID stored locally in `~/.vectra/telemetry.json` (no PII, no emails, no IPs), plus coarse event data like which providers and vector stores get configured, ingestion batch sizes and durations, which retrieval strategy gets used, and error types by stage (no stack traces, no query content).
+
+Turn it on explicitly:
+
+```python
+client = VectraClient(
+    VectraConfig(
+        # ...
+        telemetry={'enabled': True}
+    )
+)
+```
+
+`VECTRA_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1` in the environment overrides the config either way, a reliable way to guarantee nothing gets sent regardless of what a config file says.
+
+---
+
+## 16. Guardrails
+
+`query_rag` enforces a few defaults before anything gets embedded or sent to an LLM:
+
+* `max_query_length` (default 2000 characters): longer queries are rejected outright.
+* `block_pii` (default off): rejects queries that look like they contain an email, phone number, SSN-shaped number or a long digit run.
+* `content_filter` (default off): rejects queries matching a small built-in list of harmful phrases, extendable with `blocked_terms`.
+
+Ingestion enforces `ingestion.max_file_size_bytes` (default 50MB) before reading a file.
+
+If you're upgrading from an older version: the 2000-character query limit and the 50MB file limit are enforced now even if you never set a `guardrails` or `ingestion` block. They existed in the schema before this release but weren't actually checked. To raise them:
+
+```python
+config = VectraConfig(
+    # ... other config ...
+    guardrails={'max_query_length': 10000},
+    ingestion={'max_file_size_bytes': 200 * 1024 * 1024},
+)
+
+client = VectraClient(config)
+```
+
+The exact detection logic lives in `vectra/guardrails.py` if you need to know precisely what triggers a block.
+
+---
+
+## 17. Database Schema
+
+For Prisma users, something like this:
 
 ```prisma
 model Document {
@@ -597,33 +570,39 @@ model Document {
 
 ---
 
-## 17. Extending Vectra
+## 18. Extending Vectra
 
-Implement custom vector stores by extending `VectorStore`.
+Every vector store implements the same abstract base class. To add your own:
 
----
+```python
+class MyStore(VectorStore):
+    async def add_documents(self, documents): ...
+    async def similarity_search(self, vector, limit=5, filter=None): ...
+    async def hybrid_search(self, text, vector, limit=5, filter=None): ...
+    async def list_documents(self, filter=None, limit=100, cursor=None): ...
+    async def delete_documents(self, filter): ...
+    async def update_documents(self, filter, update_data): ...
+    async def file_exists(self, sha256, size, last_modified): ...
+```
 
-## 18. Architecture Overview
-
-Vectra follows a modular, provider-agnostic RAG architecture with clear separation of ingestion, retrieval, and generation pipelines.
-
----
-
-## 19. Development & Contribution Guide
-
-* Python 3.8+
-* Async-first (`asyncio`)
-* Pydantic-based configuration
-
----
-
-## 20. Production Best Practices
-
-* Match embedding dimensions to pgvector
-* Prefer Hybrid retrieval
-* Enable observability in staging
-* Evaluate before changing chunk sizes
+If your store has no native hybrid search, follow the pattern in `vectra/backends/qdrant_store.py`: pull a wider candidate pool with `similarity_search`, score it against the query lexically, and fuse the two rankings with reciprocal rank fusion.
 
 ---
 
-**Vectra (Python) scales cleanly from local prototypes to production-grade RAG platforms.**
+## 19. Architecture
+
+`VectraClient` is the orchestrator. Config is parsed and validated once at construction. Providers and vector stores are chosen behind abstract base classes, so nothing downstream needs to know which one is active. Streaming uses one async generator shape regardless of provider.
+
+---
+
+## 20. Development
+
+* Python 3.8 or newer
+* Async-first throughout (`asyncio`)
+* Pydantic-based configuration, validated at construction time
+
+---
+
+## 21. Production Notes
+
+Match your embedding `dimensions` to whatever your vector column was created with, especially on pgvector where a mismatch is a runtime error, not a warning. Prefer hybrid retrieval unless you have a specific reason not to. Turn on observability in staging before you need it in an incident. Re-run evaluation before changing chunk size or embedding model, since both quietly shift retrieval quality in ways that are easy to miss without a baseline.
