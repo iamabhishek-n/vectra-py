@@ -66,7 +66,7 @@ ignore = [
     "E701",  # multiple statements on one line (colon) — this codebase
              # consistently uses single-line `if cond: stmt` / `try: stmt`
              # bodies as a deliberate compact style (52 pre-existing
-             # instances across 11 files, e.g. vectra/core.py,
+             # instances across 10 files, e.g. vectra/core.py,
              # vectra/backends/*.py, vectra/webconfig_server.py). It's a
              # style preference, not a correctness issue, so it's excluded
              # rather than reformatted wholesale in this lint-adoption task.
