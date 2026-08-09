@@ -99,7 +99,12 @@ async def build_context(input: Dict[str, Any]) -> Dict[str, Any]:
                     coro = store.hybrid_search(query, vector, limit, filt)
                 else:
                     coro = store.similarity_search(vector, limit, filt)
-                return await asyncio.wait_for(coro, timeout=timeout_s)
+                try:
+                    return await asyncio.wait_for(coro, timeout=timeout_s)
+                except asyncio.TimeoutError:
+                    # asyncio.TimeoutError's str() is empty by default -- give it a
+                    # real, descriptive message so callers/warnings can identify it.
+                    raise TimeoutError(f"timeout after {timeout_s}s")
 
             results = await asyncio.gather(*[_call_one(s) for s in stores], return_exceptions=True)
             successful_lists = []
