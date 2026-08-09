@@ -500,8 +500,11 @@ class VectraClient:
             return max(1, (ascii_chars + 3) // 4 + non_ascii)
         return len(encoder.encode(str(text)))
 
-    def _build_context_parts(self, docs: List[Dict[str, Any]], query: str) -> Tuple[List[str], List[Dict[str, Any]]]:
-        budget = int(self.config.query_planning.get('token_budget', 2048)) if getattr(self.config, 'query_planning', None) else 2048
+    def _build_context_parts(self, docs: List[Dict[str, Any]], query: str, budget_override: Optional[int] = None) -> Tuple[List[str], List[Dict[str, Any]]]:
+        if budget_override is not None:
+            budget = budget_override
+        else:
+            budget = int(self.config.query_planning.get('token_budget', 2048)) if getattr(self.config, 'query_planning', None) else 2048
         prefer_summ = int(self.config.query_planning.get('prefer_summaries_below', 1024)) if getattr(self.config, 'query_planning', None) else 1024
         parts: List[str] = []
         doc_map: List[Dict[str, Any]] = []
@@ -803,7 +806,39 @@ class VectraClient:
             citations_enabled = gen_conf.get('structured_output') == 'citations' \
                 and not (getattr(self.config, 'grounding', None) and self.config.grounding.get('strict'))
 
-            context_parts, doc_map = self._build_context_parts(boosted, query)
+            # Fetch conversation history first, and route it through build_context with a
+            # RESERVED slice of the total token budget (up to half) -- this is what fixes
+            # the Phase 1 research bug: history used to be concatenated into the prompt
+            # completely outside any budget accounting, so it could grow unbounded. The
+            # remaining budget (after history) is what _build_context_parts gets for docs
+            # -- _build_context_parts itself, and its doc_map/citation-index-alignment
+            # contract, are otherwise completely untouched by this refactor (a deliberate,
+            # lower-risk alternative to routing docs through build_context's own generic
+            # packing, which would have required reconstructing doc_map and risked
+            # breaking citation index alignment -- same judgment call made in the JS
+            # sibling's Phase 2 implementation).
+            import inspect
+            total_budget = int(self.config.query_planning.get('token_budget', 2048)) if getattr(self.config, 'query_planning', None) else 2048
+            history_text = ""
+            history_tokens_used = 0
+            if self.history and session_id:
+                get_recent = getattr(self.history, 'get_recent', None)
+                if callable(get_recent):
+                    if inspect.iscoroutinefunction(get_recent):
+                        recent = await get_recent(session_id, int((getattr(self.config, 'memory', {}) or {}).get('max_messages', 10)))
+                    else:
+                        recent = get_recent(session_id, int((getattr(self.config, 'memory', {}) or {}).get('max_messages', 10)))
+                    if recent:
+                        history_budget = total_budget // 2
+                        history_packed = await build_context({
+                            "query": query,
+                            "budget": {"max_tokens": history_budget},
+                            "sources": [{"type": "history", "messages": recent}],
+                        })
+                        history_text = history_packed["text"]
+                        history_tokens_used = history_packed["tokens_used"]
+
+            context_parts, doc_map = self._build_context_parts(boosted, query, total_budget - history_tokens_used)
             if citations_enabled:
                 context_parts = [f"[{i + 1}] {p}" for i, p in enumerate(context_parts)]
             if getattr(self.config, 'grounding', None) and self.config.grounding.get('enabled'):
@@ -814,16 +849,6 @@ class VectraClient:
                 else:
                     context_parts.extend(snippets)
             context = "\n---\n".join(context_parts)
-            import inspect
-            history_text = ""
-            if self.history and session_id:
-                get_recent = getattr(self.history, 'get_recent', None)
-                if callable(get_recent):
-                    if inspect.iscoroutinefunction(get_recent):
-                        recent = await get_recent(session_id, int((getattr(self.config, 'memory', {}) or {}).get('max_messages', 10)))
-                    else:
-                        recent = get_recent(session_id, int((getattr(self.config, 'memory', {}) or {}).get('max_messages', 10)))
-                    history_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in recent])
             if getattr(self.config, 'prompts', None) and self.config.prompts.get('query'):
                 prompt = str(self.config.prompts.get('query')).replace('{{context}}', context).replace('{{question}}', query)
                 if history_text:
