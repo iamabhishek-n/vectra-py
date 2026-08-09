@@ -133,6 +133,9 @@ class VectraConfig(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
     ingestion: IngestionConfig = Field(default_factory=IngestionConfig)
     memory: Optional[Dict[str, Any]] = Field(default_factory=lambda: { 'enabled': False, 'type': 'in-memory', 'max_messages': 20 })
+    # Configures VectraClient.context.ask's packing budget and source priority.
+    # See vectra/context_layer.py's build_context for what these fields do.
+    context_layer: Optional[Dict[str, Any]] = None
     query_planning: Optional[Dict[str, Any]] = None
     grounding: Optional[Dict[str, Any]] = None
     generation: Optional[Dict[str, Any]] = None

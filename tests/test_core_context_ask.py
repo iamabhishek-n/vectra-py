@@ -4,7 +4,7 @@ from vectra.core import VectraClient
 from vectra.config import VectraConfig, EmbeddingConfig, LLMConfig, DatabaseConfig
 
 
-def make_config(memory=None, guardrails=None):
+def make_config(memory=None, guardrails=None, context_layer=None):
     kwargs = dict(
         embedding=EmbeddingConfig(provider="openai", api_key="test-key", model_name="text-embedding-3-small"),
         llm=LLMConfig(provider="openai", api_key="test-key", model_name="gpt-4o-mini"),
@@ -13,6 +13,8 @@ def make_config(memory=None, guardrails=None):
     )
     if guardrails is not None:
         kwargs["guardrails"] = guardrails
+    if context_layer is not None:
+        kwargs["context_layer"] = context_layer
     return VectraConfig(**kwargs)
 
 
@@ -78,3 +80,21 @@ class TestContextAsk:
         await client.context.ask("q")
 
         client._run_middlewares.assert_any_call("on_before_retrieve", "q", [0.1, 0.2])
+
+    async def test_applies_custom_context_layer_budget_through_real_config_parsing(self):
+        # Regression guard: VectraConfig previously had no context_layer field
+        # declared, so Pydantic's default extra='ignore' silently dropped it
+        # during construction. A caller setting context_layer['budget']
+        # never actually changed the packing budget, context.ask always fell
+        # back to the hardcoded 2048 default. This goes through VectraConfig's
+        # real construction, not a hand-built dict, so it fails if the field
+        # regresses to being dropped.
+        client = VectraClient(make_config(context_layer={"budget": {"max_tokens": 12}}))
+        client.embedder.embed_query = AsyncMock(return_value=[0.1, 0.2])
+        client.vector_store.similarity_search = AsyncMock(return_value=[
+            {"content": "a" * 500, "metadata": {}},
+        ])
+
+        result = await client.context.ask("q")
+
+        assert result["tokens_budget"] == 12
