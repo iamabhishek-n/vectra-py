@@ -58,6 +58,15 @@ new version number.
   filter-based listing, full CRUD support, no fallback needed).
 
 ### Fixed
+- **Security**: the `webconfig`/`dashboard` server (`vectra webconfig`,
+  `vectra dashboard`) had a path traversal vulnerability in its
+  `/dashboard/` asset route (arbitrary file read, including via
+  percent-encoded `../`) and no authentication on `/config`
+  (unauthenticated read of stored API keys, unauthenticated write of
+  arbitrary config) or `/api/observability/*`. Fixed with a
+  traversal-safe path resolver and a random per-run token required on
+  the sensitive routes. Already bound to `127.0.0.1` by default, unlike
+  the JS server.
 - `context_layer` config had no field declared on `VectraConfig`, so
   Pydantic's default `extra='ignore'` silently dropped it. `context.ask`'s
   budget and priority were always the hardcoded 2048-token default no matter
