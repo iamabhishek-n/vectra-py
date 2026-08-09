@@ -22,6 +22,7 @@ from .backends.postgres_store import PostgresVectorStore
 from .backends.chroma_store import ChromaVectorStore
 from .backends.qdrant_store import QdrantVectorStore
 from .backends.milvus_store import MilvusVectorStore
+from .backends.pinecone_store import PineconeVectorStore
 from .backends.huggingface import HuggingFaceBackend
 from .reranker import get_reranker
 from .memory import InMemoryHistory, RedisHistory, PostgresHistory
@@ -102,6 +103,8 @@ class VectraClient:
             self.vector_store = QdrantVectorStore(config.database)
         elif config.database.type == 'milvus':
             self.vector_store = MilvusVectorStore(config.database)
+        elif config.database.type == 'pinecone':
+            self.vector_store = PineconeVectorStore(config.database)
         else:
             raise ValueError(f"Unsupported database type: {config.database.type}")
             
